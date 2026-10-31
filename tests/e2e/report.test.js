@@ -458,34 +458,31 @@ test('filter inputs focus without an extra outline and keep their normal or erro
   expect(await room(2).evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
 });
 
-test('excluding five-room apartments survives full batched refreshes using five HTTP requests', async () => {
+test('excluding five-room apartments survives batched refreshes while reusing metadata', async () => {
   fixture.state.items = Array.from({ length: 501 }, (_, i) => deal(i + 1, { ufCrmRooms: i % 5 + 1 }));
-  const statuses = [];
-  const errors = [];
-  page.on('response', (response) => { if (response.url().endsWith('/api/report')) statuses.push(response.status()); });
+  const statuses = [], errors = [];
+  page.on('response', (response) => { if (new URL(response.url()).pathname === '/api/report') statuses.push(response.status()); });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(url); await ready();
-  expect(fixture.state.requests).toHaveLength(14);
-  expect(fixture.state.httpRequests).toHaveLength(5);
-  const initialRequests = structuredClone(fixture.state.requests);
+  expect(fixture.state.httpRequests).toHaveLength(4);
+  const initial = fixture.state.httpRequests.length;
   await room(5).click();
   expect(await room(5).getAttribute('aria-pressed')).toBe('false');
   expect(await columns().count()).toBe(4);
-  expect(fixture.state.requests).toHaveLength(14);
-  expect(fixture.state.httpRequests).toHaveLength(5);
+  expect(fixture.state.httpRequests).toHaveLength(initial);
   for (let run = 1; run <= 3; run++) {
     await reloadReport();
     expect(await room(5).getAttribute('aria-pressed')).toBe('false');
     expect(await columns().count()).toBe(4);
-    expect(fixture.state.requests.slice(run * 14)).toEqual(initialRequests);
-    expect(fixture.state.httpRequests).toHaveLength((run + 1) * 5);
+    expect(fixture.state.httpRequests).toHaveLength(initial + run * 2);
+    expect(fixture.state.requests.filter((r) => r.method !== 'crm.item.list')).toHaveLength(3);
   }
   expect(statuses).toEqual([200, 200, 200, 200]);
   expect(errors).toEqual([]);
 });
 
 test('filters intersect instantly, keep global problems, preserve mode and never fetch again', async () => {
-  let requests = 0; page.on('request', (request) => { if (request.url().endsWith('/api/report')) requests++; });
+  let requests = 0; page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/report') requests++; });
   await baseFilters();
   expect(await labels()).toEqual(['1՝ 100.1 AMD, 1 գործարք', '2՝ 600.6 AMD, 2 գործարք', '3՝ 300.3 AMD, 1 գործարք']);
   await columns().first().hover(); expect(await page.getByRole('tooltip').count()).toBe(0);
@@ -723,7 +720,8 @@ const ticks = () => page.getByTestId('y-tick').allTextContents();
 const xTitle = () => page.locator('footer').getByText(/· Գործարքների քանակ · X$/);
 
 test('filtered total and rounded scale follow the active chart without changing the successful update time', async () => {
-  await page.clock.setFixedTime(new Date('2026-10-23T10:05:09Z'));
+  fixture.state.time = '2026-10-23T10:05:09Z';
+  await page.clock.setFixedTime(new Date('2030-01-01T00:00:00Z')); // browser clock must not determine snapshot time
   await baseFilters();
   expect(await total().innerText()).toBe('Գործարքների քանակ՝ 4');
   expect(await timestamp().innerText()).toBe('23.10.2026 14:05:09');
@@ -739,13 +737,15 @@ test('filtered total and rounded scale follow the active chart without changing 
   expect(await timestamp().innerText()).toBe('23.10.2026 14:05:09');
   expect(fixture.state.reads).toBe(1);
   await clearRanges(); expect(await total().innerText()).toBe('Գործարքների քանակ՝ 4');
+  fixture.state.time = '2026-10-23T11:00:00Z';
   await refresh().focus(); await refresh().press('Enter'); await ready();
   expect(await timestamp().innerText()).toBe('23.10.2026 15:00:00');
   expect(fixture.state.reads).toBe(2);
 });
 
 test('loading and failure hide footer, retry and successful empty response set fresh time and zero totals', async () => {
-  await page.clock.setFixedTime(new Date('2026-10-23T10:05:09Z'));
+  fixture.state.time = '2026-10-23T10:05:09Z';
+  await page.clock.setFixedTime(new Date('2030-01-01T00:00:00Z')); // browser clock must not determine snapshot time
   fixture.state.gate = new Promise((resolve) => { release = resolve; });
   await page.goto(url); await page.getByText('Տվյալները բեռնվում են…').waitFor();
   expect(await refresh().isDisabled()).toBe(true); expect(await timestamp().count()).toBe(0);
@@ -755,7 +755,7 @@ test('loading and failure hide footer, retry and successful empty response set f
   expect(await timestamp().count()).toBe(0); expect(await total().count()).toBe(0);
   expect(await xTitle().count()).toBe(0); expect(await refresh().isEnabled()).toBe(true);
   fixture.state.failPage = undefined; fixture.state.items = [];
-  await page.clock.setFixedTime(new Date('2026-10-23T12:00:00Z'));
+  fixture.state.time = '2026-10-23T12:00:00Z';
   await reloadReport();
   expect(await timestamp().innerText()).toBe('23.10.2026 16:00:00');
   expect(await total().innerText()).toBe('Գործարքների քանակ՝ 0');
@@ -869,4 +869,64 @@ test.each([1440, 375])('new chart layout and long full labels remain readable at
   await problems().click(); await page.getByRole('dialog').waitFor(); await page.keyboard.press('Escape');
   fixture.state.items.pop(); await reloadReport();
   expect(await problems().count()).toBe(0); expect(await xTitle().isVisible()).toBe(true);
+});
+
+
+test('page reload and a second tab use cached data and server time, manual refresh gets fresh deals', async () => {
+  fixture.state.items = [deal(1)];
+  await page.goto(url); await ready();
+  const time = await timestamp().getAttribute('datetime');
+  const count = fixture.state.httpRequests.length;
+  fixture.state.time = '2026-06-01T10:01:00Z';
+  fixture.state.items[0].opportunity = '90';
+  await page.reload(); await ready();
+  expect(fixture.state.httpRequests).toHaveLength(count);
+  expect(await timestamp().getAttribute('datetime')).toBe(time);
+  expect(await page.getByRole('img', { name: '2՝ 10 AMD, 1 գործարք', exact: true }).count()).toBe(1);
+  const other = await page.context().newPage();
+  try {
+    await other.goto(url); await other.locator('footer time').waitFor();
+    expect(await other.locator('footer time').getAttribute('datetime')).toBe(time);
+    expect(fixture.state.httpRequests).toHaveLength(count);
+  } finally { await other.close(); }
+  await reloadReport();
+  expect(await page.getByRole('img', { name: '2՝ 90 AMD, 1 գործարք', exact: true }).count()).toBe(1);
+  expect(await timestamp().getAttribute('datetime')).toBe('2026-06-01T10:01:00.000Z');
+  expect(fixture.state.requests.filter((r) => r.method !== 'crm.item.list')).toHaveLength(3);
+});
+
+test('automatic retries keep loading, recover on third retry and show no data after exhaustion', async () => {
+  await new Promise((resolve) => server.close(resolve));
+  // Use real production retry delays for this browser scenario; virtual-time
+  // unit tests check their exact boundaries without slowing the rest of e2e.
+  const starts = [];
+  server = createServer({ ...fixture, waitRetry: undefined, fetchImpl: async (...args) => {
+    if (Object.values(JSON.parse(args[1].body).cmd || {}).some((cmd) => cmd.startsWith('crm.item.list?'))) starts.push(performance.now());
+    return fixture.fetchImpl(...args);
+  } });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  url = `http://127.0.0.1:${server.address().port}`;
+  fixture.state.items = [deal(1)];
+  await page.goto(url); await ready();
+  fixture.state.commandFailures = 3;
+  starts.length = 0;
+  await refresh().click();
+  await page.getByText('Տվյալները բեռնվում են…').waitFor();
+  expect(await refresh().isDisabled()).toBe(true);
+  expect(await timestamp().count()).toBe(0);
+  expect(await page.getByRole('alert').count()).toBe(0);
+  await ready();
+  expect(starts).toHaveLength(4);
+  for (let i = 1; i < starts.length; i++) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(1990);
+  fixture.state.commandFailures = 4;
+  starts.length = 0;
+  await refresh().click();
+  await page.getByRole('alert').waitFor();
+  expect(starts).toHaveLength(4);
+  expect(await columns().count()).toBe(0);
+  expect(await timestamp().count()).toBe(0);
+  expect(await refresh().isEnabled()).toBe(true);
+  fixture.state.items[0].opportunity = '99';
+  await reloadReport();
+  expect(await page.getByRole('img', { name: '2՝ 99 AMD, 1 գործարք', exact: true }).count()).toBe(1);
 });

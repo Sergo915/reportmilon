@@ -9,13 +9,14 @@ async function main({
   fetchImpl = globalThis.fetch,
   timeoutMs,
   scheduleRequest,
+  waitRetry,
   stdout = process.stdout,
   stderr = process.stderr,
 } = {}) {
   let webhookUrl;
   try {
     ({ webhookUrl } = loadConfig({ env, envPath }));
-    const call = createClient({ webhookUrl, fetchImpl, timeoutMs, scheduleRequest });
+    const call = createClient({ webhookUrl, fetchImpl, timeoutMs, scheduleRequest, waitRetry });
     const result = await getDeals(call);
     stdout.write(`${redact(formatResult(result), webhookUrl)}\n`);
     return 0;

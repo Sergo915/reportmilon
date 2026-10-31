@@ -1,69 +1,82 @@
 const { createClient } = require('../../src/bitrix24/client.cjs');
+const { getDeals } = require('../../src/bitrix24/deals.cjs');
 const { loadReport } = require('../../src/report/load.cjs');
 const { createFixture, deal, WEBHOOK } = require('../support/crm-fixture.cjs');
 
-test.each([0, 50, 51, 503, 2553])('batch preserves the complete %i-deal report and caps packets at 50 commands', async (count) => {
-  const items = Array.from({ length: count }, (_, i) => deal(i + 1));
-  const fast = createFixture({ items });
-  const sequential = createFixture({ items });
-  const expected = await loadReport({ ...sequential, fetchImpl: async (...args) => {
-    const response = await sequential.fetchImpl(...args);
-    const body = await response.json();
-    delete body.total; // A legacy response without total must still follow next.
-    return { ...response, json: async () => body };
-  } });
-  const actual = await loadReport(fast);
+test.each([0, 1, 49, 50, 51, 100, 503, 2553])('loads every one of %i sparse deals without total or next', async (count) => {
+  const items = Array.from({ length: count }, (_, i) => deal((i + 1) * 7));
+  const fixture = createFixture({ items });
+  const actual = await loadReport(fixture);
   expect(actual.status).toBe(200);
-  expect(actual).toEqual(expected);
   expect(actual.body.deals).toHaveLength(count);
-  const pages = Math.max(1, Math.ceil(count / 50));
-  expect(fast.state.httpRequests).toHaveLength(4 + Math.ceil((pages - 1) / 50));
-  const starts = fast.state.requests.filter((r) => r.method === 'crm.item.list').map((r) => r.params.start);
-  expect(starts).toEqual(Array.from({ length: pages }, (_, i) => i * 50));
-  for (const packet of fast.state.httpRequests.filter((r) => r.method === 'batch')) {
+  if (count) expect(actual.body.rooms[1]).toEqual({ category: 2, amount: String(count * 10), count });
+  else expect(actual.body.rooms).toEqual([]);
+  const call = createClient({ webhookUrl: WEBHOOK, ...fixture });
+  const data = await getDeals(call);
+  expect(data.items.map((item) => item.id)).toEqual(items.map((item) => item.id));
+  for (const { method, params } of fixture.state.requests) {
+    if (method !== 'crm.item.list') continue;
+    expect(params.start).toBe(-1);
+    expect(params.filter).toMatchObject({ categoryId: 3, stageId: 'C3:WON' });
+    expect(params.select).not.toContain('*');
+  }
+  const packets = fixture.state.httpRequests.filter((r) => r.method === 'batch');
+  expect(packets.length).toBeGreaterThan(0);
+  for (const packet of packets) {
     expect(Object.keys(packet.params.cmd).length).toBeLessThanOrEqual(50);
     expect(packet.params.halt).toBe(1);
   }
 });
 
+test('skewed ranges continue until short pages, including empty ranges and large safe IDs', async () => {
+  const ids = [...Array.from({ length: 550 }, (_, i) => i + 1),
+    ...Array.from({ length: 50 }, (_, i) => Number.MAX_SAFE_INTEGER - 49 + i)];
+  const fixture = createFixture({ items: ids.map((id) => deal(id)) });
+  const data = await getDeals(createClient({ webhookUrl: WEBHOOK, ...fixture }));
+  expect(data.items.map((row) => row.id)).toEqual(ids);
+  const continuations = fixture.state.requests.filter((r) => r.method === 'crm.item.list' && r.params.filter['>id'] > 0);
+  expect(continuations.some((r) => Number(r.params.filter['>id']) === 550)).toBe(true);
+});
+
 test.each([
   ['subrequest error', (body) => { body.result.result_error.q1 = { error: 'ACCESS_DENIED', error_description: WEBHOOK }; }],
   ['missing result', (body) => { delete body.result.result.q1; }],
-  ['missing totals', (body) => { delete body.result.result_total; }],
+  ['invalid totals map', (body) => { body.result.result_total = 7; }],
   ['missing error map', (body) => { delete body.result.result_error; }],
-  ['changed total', (body) => { body.result.result_total.q1++; }],
-  ['truncated page', (body) => { body.result.result.q0.items.pop(); }],
-  ['empty page', (body) => { body.result.result.q0.items = []; }],
   ['invalid row', (body) => { body.result.result.q0.items[0] = null; }],
-  ['missing next', (body) => { delete body.result.result_next.q0; }],
-  ['unexpected last next', (body) => { body.result.result_next.q1 = 150; }],
-  ['duplicate ID', (body) => { body.result.result.q1.items[0].id = 100; }],
+  ['duplicate ID', (body) => { body.result.result.q1.items[1].id = body.result.result.q1.items[0].id; }],
   ['wrong filter', (body) => { body.result.result.q1.items[0].stageId = 'OTHER'; }],
-])('rejects %s inside HTTP 200 batch without exposing partial results or secrets', async (_name, corrupt) => {
-  const fixture = createFixture({ items: Array.from({ length: 101 }, (_, i) => deal(i + 1)) });
+  ['out of range', (body) => { body.result.result.q1.items[0].id = 1; }],
+  ['invalid ID', (body) => { body.result.result.q1.items[0].id = 'oops'; }],
+])('rejects %s without exposing partial results or secrets', async (_name, corrupt) => {
+  const fixture = createFixture({ items: Array.from({ length: 151 }, (_, i) => deal(i + 1)) });
   const actual = await loadReport({ ...fixture, fetchImpl: async (...args) => {
     const response = await fixture.fetchImpl(...args);
     const body = await response.json();
-    if (args[0].endsWith('/batch.json')) corrupt(body);
+    const cmd = JSON.parse(args[1].body).cmd;
+    if (cmd && Object.values(cmd)[0].startsWith('crm.item.list?')) corrupt(body);
     return { ...response, json: async () => body };
   } });
   expect(actual).toEqual({ status: 502, body: { error: 'CRM_READ_ERROR' } });
 });
 
-test.each([-1, 1.5, '51', 50, 100])('rejects invalid or inconsistent first-page total %s', async (total) => {
-  const fixture = createFixture({ items: Array.from({ length: 51 }, (_, i) => deal(i + 1)) });
+test('batch without count maps succeeds and legacy totals do not control cursor paging', async () => {
+  const fixture = createFixture({ items: Array.from({ length: 100 }, (_, i) => deal(i + 1)) });
   const actual = await loadReport({ ...fixture, fetchImpl: async (...args) => {
     const response = await fixture.fetchImpl(...args);
     const body = await response.json();
-    if (args[0].endsWith('/crm.item.list.json')) body.total = total;
+    if (args[0].endsWith('/batch.json')) {
+      delete body.result.result_total; delete body.result.result_next;
+    } else if (args[0].endsWith('/crm.item.list.json')) { body.total = -1; body.next = 'ignored'; }
     return { ...response, json: async () => body };
   } });
-  expect(actual.status).toBe(502);
+  expect(actual.status).toBe(200);
+  expect(actual.body.deals).toHaveLength(100);
 });
 
 test('batch refuses writes, nested batches, raw commands and oversized packets before network access', async () => {
   const fetchImpl = jest.fn();
-  const call = createClient({ webhookUrl: WEBHOOK, fetchImpl, scheduleRequest: (task) => task() });
+  const call = createClient({ webhookUrl: WEBHOOK, fetchImpl, scheduleRequest: (task) => task(), waitRetry: async () => {} });
   for (const commands of [[], ['crm.item.delete?id=1'], [{ method: 'batch', params: {} }],
     [{ method: 'crm.item.delete', params: { id: 1 } }], Array.from({ length: 51 }, () => ({ method: 'crm.item.list', params: {} }))]) {
     await expect(call.batch(commands)).rejects.toThrow();
@@ -77,7 +90,7 @@ test('batch encodes nested parameters and returns results in command order, incl
     result: { q1: { items: [] }, q0: { items: [{ id: 1 }] } }, result_error: [],
     result_total: { q0: 1, q1: 0 }, result_next: [],
   } }) }));
-  const call = createClient({ webhookUrl: WEBHOOK, fetchImpl, scheduleRequest: (task) => task() });
+  const call = createClient({ webhookUrl: WEBHOOK, fetchImpl, scheduleRequest: (task) => task(), waitRetry: async () => {} });
   const params = { entityTypeId: 2, select: ['id', 'ufCrmRooms'], filter: { stageId: 'C3:WON & test=1' }, order: { id: 'ASC' }, start: 50 };
   expect(await call.batch([{ method: 'crm.item.list', params }, { method: 'crm.item.list', params }]))
     .toEqual([{ result: { items: [{ id: 1 }] }, total: 1 }, { result: { items: [] }, total: 0 }]);

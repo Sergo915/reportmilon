@@ -1,6 +1,6 @@
 const { createClient, createRequestScheduler } = require('../../src/bitrix24/client.cjs');
 
-const reply = { ok: true, status: 200, json: async () => ({ result: [] }) };
+const reply = { ok: true, status: 200, json: async () => ({ result: { items: [], categories: [] } }) };
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
@@ -24,14 +24,14 @@ test('14 requests and the next refresh share 200 ms spacing across clients for o
 
 test('failed request releases the queue but preserves the interval before retry', async () => {
   const fetchImpl = jest.fn().mockRejectedValueOnce(new Error('private URL')).mockResolvedValue(reply);
-  const call = createClient({ webhookUrl: 'https://failure.example/rest/7/test/', fetchImpl });
+  const call = createClient({ webhookUrl: 'https://failure.example/rest/7/test/', fetchImpl, retries: 0 });
   const failed = expect(call('crm.item.list', {})).rejects.toThrow('сетевая ошибка');
   const retry = call('crm.item.list', {});
   await jest.advanceTimersByTimeAsync(199);
   await failed;
   expect(fetchImpl).toHaveBeenCalledTimes(1);
   await jest.advanceTimersByTimeAsync(1);
-  await expect(retry).resolves.toEqual({ result: [] });
+  await expect(retry).resolves.toEqual({ result: { items: [], categories: [] } });
   expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
 
@@ -55,14 +55,14 @@ test('queue waiting does not consume the request timeout and slow requests never
 
 test('a timed out request releases the queue for the next request', async () => {
   const fetchImpl = jest.fn().mockImplementationOnce(async () => new Promise(() => {})).mockResolvedValue(reply);
-  const call = createClient({ webhookUrl: 'https://timeout.example/rest/7/test/', fetchImpl, timeoutMs: 100 });
+  const call = createClient({ webhookUrl: 'https://timeout.example/rest/7/test/', fetchImpl, retries: 0, timeoutMs: 100 });
   const failed = expect(call('crm.item.list', {})).rejects.toThrow('время ожидания');
   const next = call('crm.item.list', {});
   await jest.advanceTimersByTimeAsync(100);
   await failed;
   expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(true);
   await jest.advanceTimersByTimeAsync(100);
-  await expect(next).resolves.toEqual({ result: [] });
+  await expect(next).resolves.toEqual({ result: { items: [], categories: [] } });
 });
 
 test('a complete 503-deal report stays below 4 seconds with slow CRM responses and batch processing', async () => {
@@ -84,7 +84,7 @@ test('a complete 503-deal report stays below 4 seconds with slow CRM responses a
   expect(report.status).toBe(200);
   expect(report.body.deals).toHaveLength(503);
   expect(report.body.rooms[1]).toEqual({ category: 2, amount: '5030', count: 503 });
-  expect(fixture.state.requests).toHaveLength(14);
-  expect(fixture.state.httpRequests).toHaveLength(5);
+  expect(fixture.state.requests).toHaveLength(15);
+  expect(fixture.state.httpRequests).toHaveLength(4);
   expect(completedAt).toBeLessThanOrEqual(4000);
 });

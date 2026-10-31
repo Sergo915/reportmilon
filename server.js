@@ -1,9 +1,10 @@
 const http = require('node:http');
 const path = require('node:path');
 const { readFile, realpath } = require('node:fs/promises');
-const { loadReport } = require('./src/report/load.cjs');
+const { createReportLoader } = require('./src/report/load.cjs');
 
 function createServer({ distPath = path.join(__dirname, 'dist'), liveReload, ...reportOptions } = {}) {
+  const loadReport = createReportLoader(reportOptions);
   return http.createServer(async (request, response) => {
     const pathname = request.url.split('?')[0];
     if (liveReload && request.method === 'GET' && pathname === '/__dev/events') {
@@ -11,7 +12,7 @@ function createServer({ distPath = path.join(__dirname, 'dist'), liveReload, ...
       return;
     }
     if (request.method === 'GET' && pathname === '/api/report') {
-      const { status, body } = await loadReport(reportOptions);
+      const { status, body } = await loadReport({ refresh: new URL(request.url, 'http://localhost').searchParams.get('refresh') === '1' });
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       response.end(JSON.stringify(body));
       return;

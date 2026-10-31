@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process');
 const { main } = require('../../scripts/bitrix-check.cjs');
 const { loadConfig } = require('../../src/bitrix24/config.cjs');
 const { createClient } = require('../../src/bitrix24/client.cjs');
+const { decodeCommand, selectItems } = require('../support/crm-fixture.cjs');
 const { getDeals } = require('../../src/bitrix24/deals.cjs');
 
 const TOKEN = 'synthetic-test-secret';
@@ -36,6 +37,16 @@ function fixture({ count = 51, categoryId = 3 } = {}) {
   const fetchImpl = jest.fn(async (url, options) => {
     const method = url.split('/').at(-1).replace(/\.json$/, '');
     const params = JSON.parse(options.body);
+    if (method === 'batch') {
+      const result = { result: {}, result_error: {} };
+      for (const [key, command] of Object.entries(params.cmd)) {
+        const [name, values] = decodeCommand(command);
+        const body = await (await fetchImpl(URL + name + '.json', { ...options, body: JSON.stringify(values) })).json();
+        if (body.error) { result.result_error[key] = body; break; }
+        result.result[key] = body.result;
+      }
+      return reply({ result });
+    }
     if (method === 'crm.category.list') return reply({ result: { categories } });
     if (method === 'crm.status.list') return reply({ result: stages });
     if (method === 'crm.item.fields') {
@@ -46,9 +57,8 @@ function fixture({ count = 51, categoryId = 3 } = {}) {
       return reply({ result: { fields: Object.fromEntries(entries) } });
     }
     if (method === 'crm.item.list') {
-      const matches = allItems.filter((item) => item.categoryId === params.filter.categoryId
-        && item.stageId === params.filter.stageId);
-      const page = matches.slice(params.start, params.start + 50).map((item) => {
+      const matches = selectItems(allItems, params);
+      const page = matches.slice(0, 50).map((item) => {
         // Reproduce the observed portal behavior: Y omits selected standard fields.
         const entries = Object.entries(item).map(([key, value]) => [
           params.useOriginalUfNames === 'Y' && key.startsWith('ufCrm')
@@ -59,7 +69,7 @@ function fixture({ count = 51, categoryId = 3 } = {}) {
       });
       return reply({
         result: { items: page },
-        ...(params.start + 50 < matches.length ? { next: params.start + 50 } : {}),
+
       });
     }
     throw new Error(`Unexpected method ${method}`);
@@ -72,7 +82,7 @@ async function run(fetchImpl, options = {}) {
   let err = '';
   const code = await main({
     env: { BITRIX24_WEBHOOK_URL: URL }, fetchImpl,
-    scheduleRequest: (task) => task(),
+    scheduleRequest: (task) => task(), waitRetry: async () => {},
     stdout: { write: (text) => { out += text; } },
     stderr: { write: (text) => { err += text; } },
     ...options,
@@ -147,7 +157,7 @@ describe('Bitrix24 complete check', () => {
     expect(result.out).toContain('Ընդհանուր արժեք: "123456.789"; валюта: "AMD"');
     expect(result.out).toContain('Սենյակների քանակ: 0');
   });
-  test('retrieves 51 matching deals, follows next and prints only five samples', async () => {
+  test('retrieves 51 matching deals without counts and prints only five samples', async () => {
     const f = fixture();
     const result = await run(f.fetchImpl);
     expect(result.code).toBe(0);
@@ -165,16 +175,17 @@ describe('Bitrix24 complete check', () => {
     expect(requests.find((r) => r.url.endsWith('crm.item.fields.json')).params)
       .toEqual({ entityTypeId: 2, useOriginalUfNames: 'N' });
     const lists = requests.filter((r) => r.url.endsWith('crm.item.list.json'));
-    expect(lists.map((r) => r.params.start)).toEqual([0, 50]);
-    for (const { params } of lists) {
+    expect(lists.length).toBeGreaterThan(1);
+    expect(lists.every((r) => r.params.start === -1)).toBe(true);
+    for (const { params } of lists.filter((r) => r.params.order.id === 'ASC')) {
       expect(params).toMatchObject({
         entityTypeId: 2, useOriginalUfNames: 'N',
         filter: { categoryId: 3, stageId: 'C3:WON' }, order: { id: 'ASC' },
         select: ['id', 'categoryId', 'stageId', 'opportunity', 'currencyId', ...codes],
       });
-      expect(Object.keys(params.filter)).toHaveLength(2);
+      expect(Object.keys(params.filter).every((key) => ['categoryId', 'stageId', '>id', '<=id'].includes(key))).toBe(true);
     }
-    const data = await getDeals(createClient({ webhookUrl: URL, fetchImpl: f.fetchImpl, scheduleRequest: (task) => task() }));
+    const data = await getDeals(createClient({ webhookUrl: URL, fetchImpl: f.fetchImpl, scheduleRequest: (task) => task(), waitRetry: async () => {} }));
     expect(data.items).toHaveLength(51);
     expect(data.items.at(-1).id).toBe(51);
   });
@@ -253,12 +264,12 @@ describe('Bitrix24 safe errors', () => {
     ['JSON', async () => ({ ok: true, json: async () => { throw new Error(URL); } }), 'JSON'],
     ['network', async () => { throw new Error(URL); }, 'сетевая ошибка'],
     ['missing result', async () => reply({ value: URL }), 'отсутствует result'],
-    ['invalid structure', async () => reply({ result: { categories: 'bad' } }), 'структура'],
+    ['invalid structure', async () => reply({ result: { categories: 'bad' } }), 'некорректный'],
   ])('%s failures do not leak the URL or print success', async (_name, fetchImpl, expected) => {
     const result = await run(fetchImpl);
     expect(result.code).toBe(1);
     expect(result.err).toContain(expected);
-    expect(result.err).toContain('crm.category.list');
+    expect(result.err).toMatch(/batch|crm.category.list/);
     expect(result.err).not.toContain(TOKEN);
     expect(result.err).not.toContain(URL);
     expect(result.out).toBe('');
@@ -277,32 +288,32 @@ describe('Bitrix24 safe errors', () => {
   test('a failure on the second page never reports a complete count', async () => {
     const f = fixture();
     const fetchImpl = async (url, opts) => {
-      if (url.endsWith('crm.item.list.json') && JSON.parse(opts.body).start === 50) {
-        return reply({ error: 'QUERY_LIMIT_EXCEEDED', error_description: URL });
+      if (url.endsWith('batch.json') && Object.values(JSON.parse(opts.body).cmd).some((cmd) => cmd.startsWith('crm.item.list?'))) {
+        return reply({ result: { result: {}, result_error: { q0: { error: 'QUERY_LIMIT_EXCEEDED', error_description: URL } } } });
       }
       return f.fetchImpl(url, opts);
     };
     const result = await run(fetchImpl);
     expect(result.code).toBe(1);
-    expect(result.err).toContain('лимит запросов');
+    expect(result.err).toContain('batch: ошибка');
     expect(result.err).not.toContain(TOKEN);
     expect(result.out).toBe('');
   });
 
-  test.each([0, -1, '50'])('invalid next=%s does not loop or report success', async (next) => {
+  test.each([0, -1, '50'])('cursor paging ignores obsolete next=%s', async (next) => {
     const f = fixture();
     const result = await run(async (url, opts) => {
       const response = await f.fetchImpl(url, opts);
-      if (url.endsWith('crm.item.list.json')) {
+      if (url.endsWith('batch.json') && Object.values(JSON.parse(opts.body).cmd).some((cmd) => cmd.startsWith('crm.item.list?'))) {
         const body = await response.json();
-        body.next = next;
+        body.result.result_next = { q0: next, q1: next };
         return reply(body);
       }
       return response;
     });
-    expect(result.code).toBe(1);
-    expect(result.err).toContain('пагинация');
-    expect(result.out).toBe('');
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    expect(result.out).toContain('Загружено сделок: 51');
   });
 
   test.each(['filter', 'duplicate'])('rejects invalid returned deals: %s', async (failure) => {
@@ -310,9 +321,9 @@ describe('Bitrix24 safe errors', () => {
     if (failure === 'duplicate') f.items[1].id = f.items[0].id;
     const result = await run(async (url, opts) => {
       const response = await f.fetchImpl(url, opts);
-      if (url.endsWith('crm.item.list.json') && failure === 'filter') {
+      if (url.endsWith('batch.json') && failure === 'filter' && Object.values(JSON.parse(opts.body).cmd).some((cmd) => cmd.startsWith('crm.item.list?'))) {
         const body = await response.json();
-        body.result.items[0].categoryId = 99;
+        body.result.result.q0.items[0].categoryId = 99;
         return reply(body);
       }
       return response;

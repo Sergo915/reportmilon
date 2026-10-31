@@ -24,24 +24,17 @@ function createFixture(state = {}) {
     const method = url.split('/').at(-1).replace(/\.json$/, '');
     const params = JSON.parse(options.body);
     state.httpRequests.push({ method, params });
+    if (state.failures > 0 && (!state.failMethod || state.failMethod === method)) {
+      state.failures--;
+      return { ok: false, status: 503 };
+    }
     return execute(method, params);
   };
   async function execute(method, params) {
     if (method === 'batch') {
       const result = { result: {}, result_error: {}, result_total: {}, result_next: {} };
       for (const [key, command] of Object.entries(params.cmd)) {
-        const [name, query] = command.split('?');
-        const decoded = {};
-        for (const [parameter, value] of new URLSearchParams(query)) {
-          const parts = parameter.match(/[^\[\]]+/g);
-          let parent = decoded;
-          for (let i = 0; i < parts.length - 1; i++) {
-            parent = parent[parts[i]] ??= /^\d+$/.test(parts[i + 1]) ? [] : {};
-          }
-          parent[parts.at(-1)] = value;
-        }
-        if (decoded.start !== undefined) decoded.start = Number(decoded.start);
-        if (decoded.filter?.categoryId !== undefined) decoded.filter.categoryId = Number(decoded.filter.categoryId);
+        const [name, decoded] = decodeCommand(command);
         const body = await (await execute(name, decoded)).json();
         if (body.error) {
           result.result_error[key] = body;
@@ -55,25 +48,32 @@ function createFixture(state = {}) {
       return { ok: true, status: 200, json: async () => ({ result }) };
     }
     state.requests.push({ method, params });
+    if (state.commandFailures > 0 && method === 'crm.item.list') {
+      state.commandFailures--;
+      return { ok: true, json: async () => ({ error: 'ACCESS_DENIED' }) };
+    }
     const reply = (body) => ({ ok: true, status: 200, json: async () => body });
     if (method === 'crm.category.list') {
-      state.reads++;
-      if (state.gate) await state.gate;
       return reply({ result: { categories: [{ id: 3, name: 'Վաճառք' }] } });
     }
     if (method === 'crm.status.list') return reply({ result: [{ ENTITY_ID: 'DEAL_STAGE_3', STATUS_ID: 'C3:WON', NAME: 'Կնքված' }] });
     if (method === 'crm.item.fields') return reply({ result: { fields: state.fields } });
     if (method === 'crm.item.list') {
-      if (state.failPage === params.start) return reply({ error: 'ACCESS_DENIED', error_description: WEBHOOK });
-      const matching = state.items.filter((item) => item.categoryId === params.filter.categoryId && item.stageId === params.filter.stageId);
-      const rows = matching.slice(params.start, params.start + 50).map((row) =>
+      if (params.order.id === 'ASC' && params.filter['>id'] === undefined) {
+        state.reads++;
+        if (state.gate) await state.gate;
+      }
+      if (state.failPage === 0 || (state.failPage !== undefined && (params.order.id === 'DESC' || params.filter['>id'] !== undefined))) return reply({ error: 'ACCESS_DENIED', error_description: WEBHOOK });
+      const matching = selectItems(state.items, params);
+      const start = params.start === -1 ? 0 : params.start;
+      const rows = matching.slice(start, start + 50).map((row) =>
         Object.fromEntries(Object.entries(row).filter(([key]) => params.select.includes(key))));
-      return reply({ result: { items: rows }, total: matching.length,
-        ...(matching.length > params.start + 50 ? { next: params.start + 50 } : {}) });
+      return reply({ result: { items: rows }, ...(params.start === -1 ? {} : { total: matching.length,
+        ...(matching.length > start + 50 ? { next: start + 50 } : {}) }) });
     }
     throw new Error('Unexpected CRM method');
   }
-  return { state, fetchImpl, scheduleRequest: (task) => task(),
+  return { state, fetchImpl, scheduleRequest: (task) => task(), waitRetry: async () => { state.retryWaits = (state.retryWaits || 0) + 1; },
     env: { BITRIX24_WEBHOOK_URL: WEBHOOK }, now: () => new Date(state.time || '2026-06-01T10:00:00Z') };
 }
 module.exports = { createFixture, deal, sampleItems, fields, WEBHOOK };
@@ -92,3 +92,28 @@ function filterItems() {
   ];
 }
 module.exports.filterItems = filterItems;
+
+// Fixture transport implements CRM semantics independently of the loader.
+function selectItems(items, params) {
+  return items.filter((item) => String(item.categoryId) === String(params.filter.categoryId)
+    && item.stageId === params.filter.stageId
+    && (params.filter['>id'] === undefined || Number(item.id) > Number(params.filter['>id']))
+    && (params.filter['<=id'] === undefined || Number(item.id) <= Number(params.filter['<=id'])))
+    .sort((a, b) => (Number(a.id) - Number(b.id)) * (params.order.id === 'DESC' ? -1 : 1));
+}
+function decodeCommand(command) {
+  const [name, query] = command.split('?');
+  const params = {};
+  for (const [parameter, value] of new URLSearchParams(query)) {
+    const parts = parameter.match(/[^\[\]]+/g);
+    let parent = params;
+    for (let i = 0; i < parts.length - 1; i++) parent = parent[parts[i]] ??= /^\d+$/.test(parts[i + 1]) ? [] : {};
+    parent[parts.at(-1)] = value;
+  }
+  if (params.start !== undefined) params.start = Number(params.start);
+  if (params.entityTypeId !== undefined) params.entityTypeId = Number(params.entityTypeId);
+  if (params.filter?.categoryId !== undefined) params.filter.categoryId = Number(params.filter.categoryId);
+  return [name, params];
+}
+module.exports.selectItems = selectItems;
+module.exports.decodeCommand = decodeCommand;

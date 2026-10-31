@@ -26,7 +26,10 @@ async function createDevelopmentServer({ root = path.resolve(__dirname, '..'), .
   const distPath = path.join(root, 'dist-dev');
   // Loading the .mjs config directly avoids transient .vite-temp modules that
   // node --watch treats as changes and would restart on every build.
-  const watcher = await build({ root, configLoader: 'native', build: { outDir: distPath, watch: {} } });
+  // Tailwind's source scanner can register generated assets after a restart.
+  // Never let writes to the output directory trigger another build.
+  const watcher = await build({ root, configLoader: 'native',
+    build: { outDir: distPath, watch: { exclude: [distPath, `${distPath}/**`] } } });
   let built = false;
   try {
     await new Promise((resolve, reject) => {

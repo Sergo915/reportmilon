@@ -67,22 +67,22 @@ function backdrop(event) {
   const rect = dialog.value.getBoundingClientRect();
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeProblems();
 }
-async function refresh() {
+async function refresh(force = true) {
   if (loading.value) return;
   closeProblems(); report.value = null; failed.value = false; loading.value = true;
   try {
-    const response = await fetch('/api/report', { cache: 'no-store' });
+    const response = await fetch(force ? '/api/report?refresh=1' : '/api/report', { cache: 'no-store' });
     if (!response.ok) throw new Error();
     const snapshot = await response.json();
     const available = roomOptions(snapshot.deals);
     selectedRooms.value = reconcileRooms(availableRooms.value, selectedRooms.value, available);
     availableRooms.value = available;
     report.value = snapshot;
-    updatedAt.value = new Date();
+    updatedAt.value = new Date(snapshot.updatedAt);
   } catch { failed.value = true; }
   finally { loading.value = false; }
 }
-onMounted(refresh);
+onMounted(() => refresh(false));
 </script>
 
 <template>
