@@ -3,12 +3,14 @@ const fields = {
   ufCrmRooms: { title: 'Սենյակների քանակ', type: 'integer' },
   ufCrmArea: { title: 'Մակերես (մ²)', type: 'double' },
   ufCrmDate: { title: 'Կնքման ամսաթիվ', type: 'date' },
+  ufCrmComplex: { title: 'Համալիր', type: 'enumeration', isMultiple: false,
+    items: [{ ID: '81', VALUE: 'Milon Tower' }, { ID: '82', VALUE: 'Milon Hills' }, { ID: '83', VALUE: 'Milon Plaza' }] },
   ufCrmProperty: { title: 'Անշարժ գույքի տեսակ', type: 'enumeration', isMultiple: false,
     items: [{ ID: '71', VALUE: 'Բնակարան' }, { ID: '72', VALUE: 'Ավտոկայանատեղի' },
       { ID: '73', VALUE: 'Թաունհաուս' }, { ID: '74', VALUE: 'Հասարակական տարածք' }] },
 };
 const deal = (id, overrides = {}) => ({ id, categoryId: 3, stageId: 'C3:WON',
-  ufCrmArea: '50', opportunity: '10', currencyId: 'AMD', ufCrmRooms: 2, ufCrmDate: '2026-01-15', ufCrmProperty: '71', ...overrides });
+  ufCrmArea: '50', opportunity: '10', currencyId: 'AMD', ufCrmRooms: 2, ufCrmDate: '2026-01-15', ufCrmProperty: '71', ufCrmComplex: '81', ...overrides });
 function sampleItems() {
   return [deal(1), deal(2, { opportunity: '25', ufCrmDate: '2025-12-31' }),
     deal(3, { ufCrmRooms: 6, opportunity: '1000000.1234', ufCrmDate: '2026-12-31' }),

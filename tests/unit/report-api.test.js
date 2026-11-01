@@ -69,7 +69,7 @@ test('HTTP contract includes every CRM page, exact totals, safe links, no browse
   expect(report.rooms[1]).toEqual({ category: 2, amount: '500', count: 50 });
   expect(report.problems.at(-1)).toEqual({ id: 51, url: 'https://portal.example/crm/deal/details/51/', reasons: [{ field: 'area', code: 'missing' }] });
   expect(report.deals).toHaveLength(50);
-  expect(report.deals[0]).toEqual({ rooms: 2, amount: '10', area: '65.5', date: '2026-01-15' });
+  expect(report.deals[0]).toEqual({ rooms: 2, amount: '10', area: '65.5', date: '2026-01-15', complex: 'tower' });
   expect(require('../../src/report/filter.cjs').calculate(report.deals, report.year)).toEqual({ rooms: report.rooms, months: report.months });
   expect(fixture.state.requests.filter((r) => r.method === 'crm.item.list').map((r) => r.params.start)).toEqual([-1, -1]);
   fixture.state.items = []; fixture.state.time = '2026-12-31T20:00:00Z';
@@ -98,7 +98,8 @@ test('missing build explains how to build and static whitelist blocks project pa
     expect(response.status).toBe(503); expect(await response.text()).toContain('npm run build');
     await fs.mkdir(path.join(dir, 'assets'));
     await fs.symlink(path.resolve(__dirname, '../../package.json'), path.join(dir, 'assets', 'escape.js'));
-    for (const target of ['/assets/escape.js', '/assets/../.env', '/assets/%2e%2e/%2eenv', '/%2eenv', '/.git/config', '/src/ui/main.js', '/api/report/']) {
+    await fs.symlink(path.resolve(__dirname, '../../package.json'), path.join(dir, 'assets', 'escape.png'));
+    for (const target of ['/assets/escape.js', '/assets/escape.png', '/images/filter.png', '/assets/../.env', '/assets/%2e%2e/%2eenv', '/%2eenv', '/.git/config', '/src/ui/main.js', '/api/report/']) {
       expect((await fetch(base + target)).status).toBe(404);
     }
     expect((await fetch(`${base}/api/report`, { method: 'POST' })).status).toBe(404);
@@ -111,11 +112,53 @@ test('area metadata is dynamic and decimal normalization preserves exact duplica
   const { status, body } = await loadReport(fixture);
   expect(status).toBe(200); expect(body.rooms[1]).toEqual({ category: 2, amount: '0.5', count: 3 });
   expect(body.deals).toHaveLength(3); expect(body.deals[1]).toEqual(body.deals[2]);
-  expect(body.deals[0]).toEqual({ rooms: 2, amount: '0.1', area: '65.5', date: '2026-01-15' });
+  expect(body.deals[0]).toEqual({ rooms: 2, amount: '0.1', area: '65.5', date: '2026-01-15', complex: 'tower' });
 });
 test.each(['missing', 'ambiguous'])('area metadata %s fails safely', async (kind) => {
   const fixture = createFixture();
   if (kind === 'missing') delete fixture.state.fields.ufCrmArea;
   else fixture.state.fields.ufCrmDuplicateArea = fixture.state.fields.ufCrmArea;
   expect(await loadReport(fixture)).toEqual({ status: 502, body: { error: 'CRM_READ_ERROR' } });
+});
+
+test('complex metadata resolves dynamic IDs, preserves base aggregates and returns only normalized values', async () => {
+  const values = ['901', 902, '903', null, undefined, '999', true, ['901'], { id: '901' }, 'Milon Tower'];
+  const fixture = createFixture({ items: values.map((value, i) => deal(i + 1, { ufCrmBuilding: value })) });
+  fixture.state.fields.ufCrmPreference = { ...structuredClone(fixture.state.fields.ufCrmComplex), title: 'Նախընտրելի թաղամաս' };
+  delete fixture.state.fields.ufCrmComplex;
+  fixture.state.fields.ufCrmBuilding = { title: 'Համալիր', type: 'enumeration', isMultiple: false,
+    items: [{ ID: 901, VALUE: 'Milon Tower' }, { ID: '902', VALUE: 'Milon Hills' }, { ID: '903', VALUE: 'Milon Plaza' }] };
+  await start(fixture);
+  const response = await fetch(`${base}/api/report`);
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.deals.map((row) => row.complex)).toEqual(['tower', 'hills', ...Array(8).fill(null)]);
+  expect(body.problems).toEqual([]);
+  expect(body.rooms[1].count).toBe(values.length);
+  expect(body.deals.every((row) => !('ufCrmBuilding' in row))).toBe(true);
+  expect(fixture.state.requests.filter((r) => r.method === 'crm.item.list').every((r) => r.params.select.includes('ufCrmBuilding'))).toBe(true);
+});
+
+test.each([
+  ['missing field', (f) => { delete f.ufCrmComplex; }],
+  ['duplicate field', (f) => { f.ufCrmOther = structuredClone(f.ufCrmComplex); }],
+  ['wrong type', (f) => { f.ufCrmComplex.type = 'string'; }],
+  ['multiple', (f) => { f.ufCrmComplex.isMultiple = true; }],
+  ['missing multiplicity', (f) => { delete f.ufCrmComplex.isMultiple; }],
+  ['missing options', (f) => { delete f.ufCrmComplex.items; }],
+  ['invalid options', (f) => { f.ufCrmComplex.items = {}; }],
+  ['invalid item', (f) => { f.ufCrmComplex.items = [null]; }],
+  ['missing Tower', (f) => { f.ufCrmComplex.items.shift(); }],
+  ['missing Hills', (f) => { f.ufCrmComplex.items.splice(1, 1); }],
+  ['duplicate Tower', (f) => { f.ufCrmComplex.items.push({ ID: '89', VALUE: 'Milon Tower' }); }],
+  ['duplicate Hills', (f) => { f.ufCrmComplex.items.push({ ID: '89', VALUE: 'Milon Hills' }); }],
+  ['invalid ID', (f) => { f.ufCrmComplex.items[0].ID = true; }],
+  ['duplicate ID', (f) => { f.ufCrmComplex.items[1].ID = '81'; }],
+])('complex %s fails safely even with an empty report', async (_name, change) => {
+  const fixture = createFixture({ items: [] }); change(fixture.state.fields);
+  await start(fixture);
+  const response = await fetch(`${base}/api/report`);
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({ error: 'CRM_READ_ERROR' });
+  expect(fixture.state.requests.filter((r) => r.method === 'crm.item.list')).toHaveLength(0);
 });

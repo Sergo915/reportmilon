@@ -5,6 +5,7 @@ const { getDeals, getMetadata } = require('../bitrix24/deals.cjs');
 const { aggregate, currentYear } = require('./aggregate.cjs');
 const { calculate } = require('./filter.cjs');
 const { PROPERTY_TYPE, apartmentItems } = require('./apartments.cjs');
+const { COMPLEX, complexField } = require('./complex.cjs');
 
 const REPORT_TTL = 5 * 60 * 1000;
 const METADATA_TTL = 24 * 60 * 60 * 1000;
@@ -45,9 +46,10 @@ function createReportLoader({ env = process.env, envPath = path.resolve(__dirnam
       const call = createClient({ ...config, fetchImpl, scheduleRequest, waitRetry, timeoutMs });
       if (!state.metadata || now().getTime() - state.metadataAt >= METADATA_TTL) {
         state.metadata = null;
-        const metadata = await getMetadata(call, { additionalFields: [PROPERTY_TYPE] });
+        const metadata = await getMetadata(call, { additionalFields: [PROPERTY_TYPE, COMPLEX] });
         // Validate enumeration before publishing metadata, even with no deals.
         apartmentItems({ ...metadata, items: [] });
+        complexField(metadata.fields);
         state.metadata = metadata;
         state.metadataAt = now().getTime();
       }

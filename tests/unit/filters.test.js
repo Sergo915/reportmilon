@@ -20,7 +20,7 @@ test('strict base snapshot and normalized minimal data', () => {
     [7, [{ field: 'rooms', code: 'missing' }]], [8, [{ field: 'amount', code: 'missing' }]],
   ]);
   expect(result.deals).toHaveLength(4);
-  expect(result.deals[1]).toEqual({ rooms: 2, amount: '200.2', area: '65.5', date: '2026-06-15' });
+  expect(result.deals[1]).toEqual({ rooms: 2, amount: '200.2', area: '65.5', date: '2026-06-15', complex: 'tower' });
 });
 test.each([undefined, null, '', ' ', 0, -1, false, true, [], {}, '65,5', 'Infinity'])('rejects area %p everywhere with reason', (value) => {
   const result = report([deal(1, { ufCrmArea: value })]);

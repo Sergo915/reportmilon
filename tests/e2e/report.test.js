@@ -10,6 +10,7 @@ const columns = () => page.locator('svg [role="img"]');
 const ready = async () => { await page.locator('footer time').waitFor(); };
 async function reloadReport() { await refresh().click(); await ready(); }
 beforeEach(async () => {
+  await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   fixture = createFixture(); server = createServer(fixture);
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   url = `http://127.0.0.1:${server.address().port}`;
@@ -64,9 +65,9 @@ test('starts with rooms, displays totals and every month, and switches without r
   await page.goto(url); await ready();
   expect(await rooms().getAttribute('aria-pressed')).toBe('true');
   expect(await columns().count()).toBe(6);
-  const second = page.getByRole('img', { name: '2՝ 35 AMD, 2 գործարք', exact: true });
-  expect(await second.getByTestId('bar-amount').textContent()).toBe('35 ֏');
-  expect(await second.getByTestId('bar-count').textContent()).toBe('2 գործարք');
+  const second = page.getByRole('img', { name: '2՝ 10 AMD, 1 գործարք', exact: true });
+  expect(await second.getByTestId('bar-amount').textContent()).toBe('10 ֏');
+  expect(await second.getByTestId('bar-count').textContent()).toBe('1 գործարք');
   await months().click(); expect(await columns().count()).toBe(12);
   expect(await page.getByText('2026', { exact: true }).count()).toBe(0);
   expect(await page.getByRole('img', { name: 'Հունվար՝ 10 AMD, 1 գործարք', exact: true }).count()).toBe(1);
@@ -103,6 +104,7 @@ test('refresh replaces totals, closes list, preserves mode and recalculates year
   await columns().first().focus(); expect(await page.getByRole('tooltip').count()).toBe(0);
   fixture.state.items = [deal(1, { opportunity: '77.125', ufCrmDate: '2027-01-01' })];
   fixture.state.time = '2026-12-31T20:00:00Z';
+  await page.clock.setFixedTime(new Date(fixture.state.time));
   await reloadReport();
   expect(await months().getAttribute('aria-pressed')).toBe('true');
   expect(await page.getByRole('tooltip').count()).toBe(0); expect(await problems().count()).toBe(0);
@@ -210,15 +212,18 @@ test('wide and narrow layout keeps controls outside graph scroll and long proble
   await page.screenshot({ path: 'test-results/report-modal.png', fullPage: true });
 });
 
-const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի ընդհանուր արժեք', area: 'Մակերես (մ²)', date: 'Կնքման ամսաթիվ' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
+const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի արժեք (֏)', area: 'Մակերես (մ²)', date: 'Կնքման ժամանակահատված' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
 const room = (n) => page.getByRole('button', { name: `Սենյակների քանակ՝ ${n}`, exact: true });
+const period = () => page.getByRole('combobox', { name: 'Կնքման ժամանակահատված', exact: true });
+const allRoomsButton = () => page.getByRole('button', { name: 'Բոլորը', exact: true });
 const clearRanges = async () => {
+  await period().selectOption('custom');
   for (const kind of ['amount', 'area', 'date']) {
     await input(kind, 'min').fill(''); await input(kind, 'max').fill('');
   }
 };
 const labels = () => columns().evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
-const baseFilters = async () => { fixture.state.items = require('../support/crm-fixture.cjs').filterItems(); await page.goto(url); await ready(); };
+const baseFilters = async () => { fixture.state.items = require('../support/crm-fixture.cjs').filterItems(); await page.goto(url); await ready(); await period().selectOption('custom'); };
 
 const filterPanel = () => page.getByRole('form', { name: 'Զտիչներ', exact: true });
 const filterArea = () => page.getByLabel('Զտիչների տարածք', { exact: true });
@@ -230,52 +235,69 @@ const filterGeometry = () => filterPanel().locator('fieldset').evaluateAll((elem
 }));
 const expectEqualPixels = (a, b) => expect(Math.abs(a - b)).toBeLessThanOrEqual(1); // Browser subpixel rounding.
 
-test.each([1440, 1024, 375, 320])('filter layout reflows without scrolling or clipping at %i px', async (width) => {
+test.each([1440, 1920, 1024, 375, 320])('filter layout reflows without scrolling or clipping at %i px', async (width) => {
   await page.setViewportSize({ width, height: 1000 }); await baseFilters();
   expect(await filterPanel().locator('legend').evaluateAll((els) => els.map((el) => getComputedStyle(el).fontSize)))
-    .toEqual(['12px', '12px', '12px', '12px']);
+    .toEqual(Array(5).fill('12px'));
   fs.mkdirSync('test-results', { recursive: true });
   await page.screenshot({ path: `test-results/filters-layout-${width}.png`, fullPage: true, animations: 'disabled' });
-  let previousRoomWidth = 0;
+
   for (const count of [4, 6, 12]) {
     fixture.state.items = [deal(1, { ufCrmRooms: count })]; await reloadReport();
+    // Each geometry case starts from All; refresh itself preserves the previous subset.
+    await allRoomsButton().click();
     const boxes = await filterGeometry();
     const panel = await filterPanel().boundingBox();
     const leftInset = boxes[0].x - panel.x;
     const panelBorder = await filterPanel().evaluate((el) => parseFloat(getComputedStyle(el).borderLeftWidth));
     expectEqualPixels(leftInset - panelBorder, 24);
-    expectEqualPixels(panel.x + panel.width - boxes.at(-1).right, leftInset);
+    expectEqualPixels(panel.x + panel.width - Math.max(...boxes.map(box => box.right)), leftInset);
     boxes.forEach((box) => expectEqualPixels(box.titleCenter, box.x + box.width / 2));
-    boxes.slice(1).forEach((box) => expectEqualPixels(box.width, boxes[1].width));
+    if (width === 1440 || width === 1920) {
+      boxes.slice(1, 3).forEach(box => expectEqualPixels(box.y + box.height / 2, boxes[0].y + boxes[0].height / 2));
+      expectEqualPixels(boxes[3].width, boxes[4].width);
+      const sectionWidth = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).evaluate(el => el.clientWidth);
+      expect(panel.width).toBeLessThan((sectionWidth - 24) * .7);
+      const select = await filterPanel().locator('select').boundingBox();
+      const complexButtons = filterPanel().locator('.complex-buttons button');
+      const tower = await complexButtons.first().boundingBox(), hills = await complexButtons.last().boundingBox();
+      const all = await allRoomsButton().boundingBox(), last = await room(count).boundingBox();
+      expectEqualPixels(select.x - panel.x, leftInset);
+      expectEqualPixels(tower.x - select.x - select.width, leftInset);
+      expectEqualPixels(all.x - hills.x - hills.width, leftInset);
+      expectEqualPixels(panel.x + panel.width - last.x - last.width, leftInset);
+      expectEqualPixels(panel.x + panel.width / 2, width / 2);
+    } else boxes.forEach((box) => expectEqualPixels(box.width, boxes[0].width));
     const rows = [...new Set(boxes.map((box) => box.y))];
-    expect(rows).toHaveLength(width === 1440 ? 1 : width === 1024 ? 2 : 4);
-    if (width === 1440) {
-      const gaps = boxes.slice(1).map((box, i) => box.x - boxes[i].right);
-      gaps.forEach((gap) => expectEqualPixels(gap, 16));
-      expect(boxes[0].width).toBeGreaterThan(previousRoomWidth); previousRoomWidth = boxes[0].width;
+    if (width < 1440) expect(rows).toHaveLength(width === 1024 ? 3 : 5);
+    else expectEqualPixels(boxes[3].y - Math.max(...boxes.slice(0, 3).map(box => box.y + box.height)), 16);
+    if (width >= 1440) {
+      for (const [a, b] of [[0, 1], [1, 2]]) expectEqualPixels(boxes[b].x - boxes[a].right, leftInset);
+      expectEqualPixels(boxes[4].x - boxes[3].right, 16);
     }
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = 1; width < 1440 && i < rows.length; i++) {
       const previousBottom = Math.max(...boxes.filter((box) => box.y === rows[i - 1]).map((box) => box.y + box.height));
       expectEqualPixels(rows[i] - previousBottom, 16);
     }
-    const buttons = await filterPanel().getByRole('button').evaluateAll((els) => els.map((el) => {
+    const buttons = await filterPanel().getByRole('button', { name: /^Սենյակների քանակ՝/ }).evaluateAll((els) => els.map((el) => {
       const box = el.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, fits: el.scrollWidth <= el.clientWidth };
     }));
     expect(buttons).toHaveLength(count);
-    buttons.forEach((box) => { expect(box.width).toBe(40); expect(box.height).toBe(box.width); expect(box.fits).toBe(true); });
-    if (count === 12) expect(new Set(buttons.map((box) => box.y)).size).toBeGreaterThan(1);
-    const inputBoxes = await filterPanel().locator('input').evaluateAll((els) => els.map((el) => {
+    buttons.forEach((box) => { expect(box.width).toBe(28); expect(box.height).toBe(32); expect(box.fits).toBe(true); });
+    if (width >= 1440) expect(new Set(buttons.map(box => box.y)).size).toBe(1);
+    else if (count === 12 && width < 640) expect(new Set(buttons.map(box => box.y)).size).toBeGreaterThan(1);
+    const inputBoxes = await filterPanel().locator('input:visible').evaluateAll((els) => els.map((el) => {
       const box = el.getBoundingClientRect(); return { height: box.height, y: box.y };
     }));
     inputBoxes.forEach((box) => expectEqualPixels(box.height, buttons[0].height));
-    if (width === 1440) inputBoxes.forEach((box) => expectEqualPixels(box.y, buttons[0].y));
-    const controlsFit = await filterPanel().locator('input, button, legend').evaluateAll((elements) => elements.every((el) => {
+
+    const controlsFit = await filterPanel().locator('fieldset input:visible, fieldset button, fieldset legend, fieldset select').evaluateAll((elements) => elements.every((el) => {
       const box = el.getBoundingClientRect(), parent = el.closest('fieldset').getBoundingClientRect();
       return box.x >= parent.x - 1 && box.right <= parent.right + 1 && box.top >= parent.top && box.bottom <= parent.bottom + 1;
     }));
     expect(controlsFit).toBe(true);
-    await room(count).click(); expect(await room(count).getAttribute('aria-pressed')).toBe('false');
-    expectEqualPixels((await filterGeometry())[0].width, boxes[0].width);
+    await room(count).click(); expect(await room(count).getAttribute('aria-pressed')).toBe('true');
+    expectEqualPixels((await filterGeometry())[2].width, boxes[2].width);
     await room(count).press('Space'); expect(await room(count).getAttribute('aria-pressed')).toBe('true');
     expect(await filterArea().evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
     await filterArea().evaluate((el) => { el.scrollLeft = el.scrollWidth; });
@@ -287,7 +309,8 @@ test.each([1440, 1024, 375, 320])('filter layout reflows without scrolling or cl
     await page.screenshot({ path: `test-results/filters-layout-${width}-${count}.png`, fullPage: true, animations: 'disabled' });
   }
   fixture.state.items = []; await reloadReport();
-  expect(await filterPanel().getByRole('button').count()).toBe(0);
+  expect(await filterPanel().getByRole('button', { name: /^Սենյակների քանակ՝/ }).count()).toBe(0);
+  expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true');
   expect((await filterGeometry())[0].width).toBeGreaterThan(0);
   expect(await filterPanel().locator('legend').first().isVisible()).toBe(true);
   for (const resizeWidth of [375, 1024, 1440]) {
@@ -388,40 +411,32 @@ test('room buttons retain their size and distinguish selected and unselected col
     return { background: style.backgroundColor, border: style.borderTopColor, color: style.color,
       fontSize: style.fontSize, width: box.width, height: box.height };
   });
-  expect(await appearance()).toEqual({ background: 'rgb(102, 133, 235)', border: 'rgb(102, 133, 235)', color: 'rgb(255, 255, 255)', fontSize: '13px', width: 40, height: 40 });
+  expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true');
+  expect(await room(1).getAttribute('aria-pressed')).toBe('false');
   await room(1).click();
-  expect(await appearance()).toEqual({ background: 'rgb(255, 255, 255)', border: 'rgb(203, 213, 225)', color: 'rgb(24, 37, 61)', fontSize: '13px', width: 40, height: 40 });
+  expect(await appearance()).toEqual({ background: 'rgb(102, 133, 235)', border: 'rgb(102, 133, 235)', color: 'rgb(255, 255, 255)', fontSize: '12px', width: 28, height: 32 });
+  await allRoomsButton().click();
+  expect(await appearance()).toEqual({ background: 'rgb(255, 255, 255)', border: 'rgb(203, 213, 225)', color: 'rgb(24, 37, 61)', fontSize: '12px', width: 28, height: 32 });
   await room(1).press('Space'); expect(await room(1).getAttribute('aria-pressed')).toBe('true');
-  await room(2).click(); await room(3).click(); await room(1).click();
+  await room(2).click(); await room(2).click(); await room(1).click();
   expect(await room(1).getAttribute('aria-pressed')).toBe('true');
 });
 
-test.each([1440, 375])('filter units stay at the right inside empty and filled numeric controls at %i px', async (width) => {
+test.each([1440, 375])('units appear only in range headings at %i px', async (width) => {
   await page.setViewportSize({ width, height: 1000 }); await baseFilters();
   expect(await filterPanel().locator('legend').allTextContents()).toEqual([
-    'Սենյակների քանակ', 'Բնակարանի ընդհանուր արժեք', 'Մակերես', 'Կնքման ամսաթիվ',
+    'Կնքման ժամանակահատված', 'Համալիր', 'Սենյակների քանակ', 'Մակերես (մ²)', 'Բնակարանի արժեք (֏)',
   ]);
-  for (const [kind, unit] of [['amount', '֏'], ['area', '(մ²)']]) {
+  for (const kind of ['amount', 'area']) {
     for (const side of ['min', 'max']) {
       const control = input(kind, side);
-      const suffix = control.locator('..').getByText(unit, { exact: true });
-      for (const value of ['', '200.2', '12345678901234567890.12', 'abc', '']) {
+      for (const [value, amountText] of [['', ''], ['200.2', '200.2'], ['12345678901234567890.12', '12 345 678 901 234 567 890.12'], ['abc', 'abc'], ['', '']]) {
         await control.fill(value);
-        expect(await control.inputValue()).toBe(value);
-        expect(await suffix.isVisible()).toBe(true);
-        const box = await control.boundingBox(), suffixBox = await suffix.boundingBox();
-        expect(suffixBox.x).toBeGreaterThan(box.x);
-        expectEqualPixels(box.x + box.width - suffixBox.x - suffixBox.width, 8);
-        expectEqualPixels(suffixBox.y + suffixBox.height / 2, box.y + box.height / 2);
-        const padding = await control.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
-        expect(box.x + box.width - padding).toBeLessThan(suffixBox.x);
-        expect(await suffix.getAttribute('aria-hidden')).toBe('true');
-        expect(await suffix.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
+        expect(await control.inputValue()).toBe(kind === 'amount' ? amountText : value);
+        expect(await control.locator('..').locator('span').count()).toBe(0);
+        expect(await control.evaluate(el => parseFloat(getComputedStyle(el).paddingRight))).toBe(12);
       }
-      await rooms().focus(); await control.scrollIntoViewIfNeeded();
-      const suffixBox = await suffix.boundingBox();
-      await page.mouse.click(suffixBox.x + suffixBox.width / 2, suffixBox.y + suffixBox.height / 2);
-      expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
+      await control.click(); expect(await control.evaluate(el => el === document.activeElement)).toBe(true);
     }
     await controlPairScreenshot(kind, width, 'empty');
     await input(kind, 'min').fill('50'); await input(kind, 'max').fill('200.2');
@@ -448,7 +463,7 @@ test('filter inputs focus without an extra outline and keep their normal or erro
       expect(await control.evaluate((el) => {
         const style = getComputedStyle(el);
         return { outline: style.outlineStyle, border: style.borderTopWidth, color: style.borderTopColor, height: el.getBoundingClientRect().height };
-      })).toEqual({ outline: 'none', border: '1px', color: 'rgb(203, 213, 225)', height: 40 });
+      })).toEqual({ outline: 'none', border: '1px', color: 'rgb(203, 213, 225)', height: 32 });
     }
   }
   await input('amount', 'min').fill('200'); await input('amount', 'max').fill('100');
@@ -466,7 +481,8 @@ test('excluding five-room apartments survives batched refreshes while reusing me
   await page.goto(url); await ready();
   expect(fixture.state.httpRequests).toHaveLength(4);
   const initial = fixture.state.httpRequests.length;
-  await room(5).click();
+  await room(1).click();
+  for (const n of [2, 3, 4]) await room(n).click();
   expect(await room(5).getAttribute('aria-pressed')).toBe('false');
   expect(await columns().count()).toBe(4);
   expect(fixture.state.httpRequests).toHaveLength(initial);
@@ -486,8 +502,8 @@ test('filters intersect instantly, keep global problems, preserve mode and never
   await baseFilters();
   expect(await labels()).toEqual(['1՝ 100.1 AMD, 1 գործարք', '2՝ 600.6 AMD, 2 գործարք', '3՝ 300.3 AMD, 1 գործարք']);
   await columns().first().hover(); expect(await page.getByRole('tooltip').count()).toBe(0);
-  await room(1).click(); expect(await page.getByRole('tooltip').count()).toBe(0);
-  await room(3).click(); await room(2).click(); expect(await room(2).getAttribute('aria-pressed')).toBe('true');
+  await room(2).click(); expect(await page.getByRole('tooltip').count()).toBe(0);
+  await room(2).click(); expect(await room(2).getAttribute('aria-pressed')).toBe('true');
   for (const [kind, min, max] of [['amount', '150', '350'], ['area', '60', '70'], ['date', '2026-01-01', '2026-12-31']]) {
     await input(kind, 'min').fill(min); await input(kind, 'max').fill(max);
   }
@@ -501,9 +517,10 @@ test('filters intersect instantly, keep global problems, preserve mode and never
   const modal = page.getByRole('dialog'); expect(await modal.getByRole('link').allTextContents()).toEqual(['5', '6', '7', '8']);
   expect(await modal.innerText()).toContain('Մակերես (մ²)՝ Լրացված չէ');
   expect(await modal.innerText()).not.toContain('500'); await page.keyboard.press('Escape');
-  await clearRanges(); await room(1).click(); await room(3).click(); expect(await months().getAttribute('aria-pressed')).toBe('true');
+  await clearRanges(); await allRoomsButton().click(); expect(await months().getAttribute('aria-pressed')).toBe('true');
   expect(await input('amount', 'min').inputValue()).toBe('');
-  expect(await room(1).getAttribute('aria-pressed')).toBe('true');
+  expect(await room(1).getAttribute('aria-pressed')).toBe('false');
+  expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true');
   expect(fixture.state.reads).toBe(1); expect(requests).toBe(1);
 });
 
@@ -597,21 +614,22 @@ test('invalid drafts retain last valid pair while other filters work; correction
 });
 
 test('room gaps, growth/shrink/empty reconciliation and page reload', async () => {
-  await baseFilters(); await room(1).click(); await room(3).click();
+  await baseFilters(); await room(2).click();
   fixture.state.items = [deal(1, { ufCrmRooms: 5 })]; await reloadReport();
-  const selected = () => page.locator('.room-buttons button[aria-pressed="true"]').allTextContents();
+  const selected = () => page.locator('.room-buttons button[aria-label][aria-pressed="true"]').allTextContents();
   expect(await selected()).toEqual(['2', '4', '5']);
   await room(2).click(); await room(4).click();
-  fixture.state.items = [deal(1)]; await reloadReport(); expect(await selected()).toEqual(['1', '2']);
+  fixture.state.items = [deal(1)]; await reloadReport(); expect(await selected()).toEqual([]);
+  expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true');
   fixture.state.items = []; await reloadReport(); expect(await selected()).toEqual([]);
   expect(await input('area', 'min').isEnabled()).toBe(true);
   fixture.state.items = [deal(1, { ufCrmRooms: 1 }), deal(2, { ufCrmRooms: 3 })]; await reloadReport();
-  expect(await selected()).toEqual(['1', '2', '3']); await room(1).click(); await room(3).click();
+  expect(await selected()).toEqual([]); expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true'); await room(2).click();
   expect(await labels()).toEqual(['2՝ 0 AMD, 0 գործարք']); expect(await page.getByText('Տվյալներ չկան', { exact: true }).isVisible()).toBe(true);
   expect(await page.getByTestId('total-count').innerText()).toBe('Գործարքների քանակ՝ 0');
   expect((await page.getByTestId('y-tick').allTextContents()).map((t) => t.trim())).toEqual(['0', '0,25', '0,5', '0,75', '1']);
   await input('area', 'min').fill('90'); await page.reload(); await ready();
-  expect(await selected()).toEqual(['1', '2', '3']); expect(await input('area', 'min').inputValue()).toBe('');
+  expect(await selected()).toEqual([]); expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true'); expect(await input('area', 'min').inputValue()).toBe('');
 });
 
 test.each([1440, 375])('filter panel shows only a centered notice on load/failure and restores saved filters at %i px', async (width) => {
@@ -635,7 +653,7 @@ test.each([1440, 375])('filter panel shows only a centered notice on load/failur
   await page.goto(url); await notice.waitFor();
   await onlyNotice();
   release(); fixture.state.gate = null; await ready();
-  await baseFilters(); await input('amount', 'min').fill('200.2'); await room(3).click();
+  await baseFilters(); await input('amount', 'min').fill('200.2'); await room(2).click();
   await input('amount', 'max').fill('100');
   expect(await panel.getByRole('alert').isVisible()).toBe(true);
   expect(await notice.count()).toBe(0);
@@ -652,11 +670,11 @@ test.each([1440, 375])('filter panel shows only a centered notice on load/failur
   expect(await input('amount', 'max').inputValue()).toBe('100');
   expect(await input('amount', 'min').isVisible()).toBe(true);
   expect(await panel.getByRole('alert').isVisible()).toBe(true);
-  expect(await panel.getByRole('group').count()).toBe(4);
+  expect(await panel.getByRole('group').count()).toBe(5);
   expect(await notice.count()).toBe(0);
   expect(await columns().last().getAttribute('aria-label')).toBe('2՝ 15 300 AMD, 51 գործարք');
   for (const items of [[], [deal(1, { ufCrmProperty: '72' })], [deal(1, { ufCrmArea: null })]]) {
-    fixture.state.items = items; await reloadReport(); expect(await page.locator('.room-buttons button').count()).toBe(0);
+    fixture.state.items = items; await reloadReport(); expect(await page.locator('.room-buttons button[aria-label]').count()).toBe(0);
     expect(await input('area', 'min').isEnabled()).toBe(true);
     expect(await notice.count()).toBe(0);
     expect(await page.getByText('Տվյալներ չկան', { exact: true }).isVisible()).toBe(true);
@@ -664,7 +682,7 @@ test.each([1440, 375])('filter panel shows only a centered notice on load/failur
   expect(await problems().innerText()).toMatch(/1/);
 });
 
-test.each([1440, 375])('filters precede grouping without a reset button or panel scroll and retain keyboard access at %i px', async (width) => {
+test.each([1440, 375])('filters precede grouping with reset and without panel scroll and retain keyboard access at %i px', async (width) => {
   await page.setViewportSize({ width, height: 1000 }); await baseFilters();
   const panel = page.getByRole('form', { name: 'Զտիչներ', exact: true });
   const panelScroll = page.getByLabel('Զտիչների տարածք', { exact: true });
@@ -672,10 +690,12 @@ test.each([1440, 375])('filters precede grouping without a reset button or panel
   const panelBox = await panel.boundingBox();
   const groupBox = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
   expect(panelBox.y + panelBox.height).toBeLessThan(groupBox.y);
-  expect(await page.getByRole('button', { name: 'Զտիչները վերակայել', exact: true }).count()).toBe(0);
+  expect(await page.getByRole('button', { name: 'Վերականգնել', exact: true }).count()).toBe(1);
   const boxes = await panel.locator('fieldset').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y }; }));
-  expect(new Set(boxes.map((b) => b.y)).size).toBe(width === 375 ? 4 : 1);
-  expect(boxes.map((b) => b.x)).toEqual(boxes.map((b) => b.x).sort((a, b) => a - b));
+  expect(new Set(boxes.map((b) => b.y)).size).toBe(width === 375 ? 5 : 3); // custom dates center the shorter fieldsets vertically
+  for (const row of [...new Set(boxes.map(b => b.y))]) {
+    const xs = boxes.filter(b => b.y === row).map(b => b.x); expect(xs).toEqual([...xs].sort((a, b) => a - b));
+  }
   expect(await panelScroll.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
   const refreshBox = await refresh().boundingBox();
   await panelScroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
@@ -686,9 +706,9 @@ test.each([1440, 375])('filters precede grouping without a reset button or panel
   expect(await panelScroll.evaluate((el) => el.scrollLeft)).toBe(panelPosition);
   expect(await refresh().boundingBox()).toEqual(refreshBox);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await room(1).focus(); await page.keyboard.press('Space'); expect(await room(1).getAttribute('aria-pressed')).toBe('false');
+  await room(1).focus(); await page.keyboard.press('Space'); expect(await room(1).getAttribute('aria-pressed')).toBe('true');
   await page.keyboard.press('Tab'); expect(await room(2).evaluate((el) => el === document.activeElement)).toBe(true);
-  await room(3).focus(); await page.keyboard.press('Tab'); expect(await input('amount', 'min').evaluate((el) => el === document.activeElement)).toBe(true);
+  await room(3).focus(); await page.keyboard.press('Tab'); expect(await input('area', 'min').evaluate((el) => el === document.activeElement)).toBe(true);
   await input('amount', 'min').fill('200'); await input('amount', 'max').fill('100');
   const errorId = await input('amount', 'max').getAttribute('aria-describedby');
   expect(await page.locator(`#${errorId}`).innerText()).toBe('Սկզբնական արժեքը չպետք է գերազանցի վերջնական արժեքը');
@@ -704,9 +724,8 @@ test.each([1440, 375])('filters precede grouping without a reset button or panel
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('Enter');
   expect(await input('date', 'min').inputValue()).toBe('2026-06-16');
-  await input('date', 'max').focus();
-  // Date controls use multiple internal segments before the next toolbar button.
-  for (let i = 0; i < 5 && !(await rooms().evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press('Tab');
+  await input('amount', 'max').focus();
+  await page.keyboard.press('Tab');
   expect(await rooms().evaluate((el) => el === document.activeElement)).toBe(true);
   await page.keyboard.press('Tab');
   expect(await months().evaluate((el) => el === document.activeElement)).toBe(true);
@@ -863,6 +882,7 @@ test.each([1440, 375])('new chart layout and long full labels remain readable at
     await scroll.evaluate((el) => { el.scrollLeft = 0; });
     await page.screenshot({ path: `test-results/chart-${axis === 'Սենյակների քանակ' ? 'rooms' : 'months'}-${viewportWidth}.png`, fullPage: true, animations: 'disabled' });
   }
+  await period().selectOption('custom');
   await input('date', 'min').fill('2026-01-01');
   expect(await page.getByText('2026', { exact: true }).count()).toBe(0);
   expect(await page.getByText(/Սկսած 2026-01-01/).count()).toBe(0);

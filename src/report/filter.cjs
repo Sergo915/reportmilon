@@ -52,7 +52,8 @@ function reconcileRooms(previous, selected, available) {
   const kept = available.filter((room) => !previous.includes(room) || selected.includes(room));
   return kept.length ? kept : [...available];
 }
-function toggleRoom(selected, room) {
+function toggleRoom(selected, room, available) {
+  if (available && available.length === selected.length) return [room];
   return selected.includes(room)
     ? selected.length > 1 ? selected.filter((value) => value !== room) : selected
     : [...selected, room].sort((a, b) => a - b);
@@ -90,14 +91,14 @@ function within(value, range, kind) {
   return (range.min == null || comparison(range.min) >= 0)
     && (range.max == null || comparison(range.max) <= 0);
 }
-function calculate(deals, year, { rooms = roomOptions(deals), amount, area, date } = {}) {
+function calculate(deals, year, { rooms = roomOptions(deals), amount, area, date, complexes } = {}) {
   const bucket = (category) => ({ category, amount: { coefficient: 0n, scale: 0 }, count: 0 });
   const roomBuckets = new Map([...rooms].sort((a, b) => a - b).map((room) => [room, bucket(room)]));
   const months = Array.from({ length: 12 }, (_, i) => bucket(i + 1));
   const include = (entry, value) => { entry.amount = add(entry.amount, value); entry.count++; };
   for (const deal of deals) {
     if (!roomBuckets.has(deal.rooms) || !within(deal.amount, amount) || !within(deal.area, area)
-      || !within(deal.date, date, 'date')) continue;
+      || !within(deal.date, date, 'date') || (complexes && !complexes.includes(deal.complex))) continue;
     const value = decimal(deal.amount);
     include(roomBuckets.get(deal.rooms), value);
     if (Number(deal.date.slice(0, 4)) === year) include(months[Number(deal.date.slice(5, 7)) - 1], value);

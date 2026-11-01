@@ -18,7 +18,7 @@ function createServer({ distPath = path.join(__dirname, 'dist'), liveReload, ...
       return;
     }
     const isIndex = ['/', '/index.html'].includes(pathname);
-    const isAsset = /^\/assets\/[a-zA-Z0-9_-]+\.(?:js|css)$/.test(pathname);
+    const isAsset = /^\/assets\/[a-zA-Z0-9_-]+\.(?:js|css|png)$/.test(pathname);
     if (!['GET', 'HEAD'].includes(request.method) || (!isIndex && !isAsset)) {
       response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Not found');
@@ -32,7 +32,8 @@ function createServer({ distPath = path.join(__dirname, 'dist'), liveReload, ...
       if (isIndex && liveReload) contents = Buffer.from(liveReload.inject(contents.toString('utf8')));
       response.writeHead(200, {
         'Content-Type': isIndex ? 'text/html; charset=utf-8'
-          : pathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8',
+          : pathname.endsWith('.png') ? 'image/png'
+            : pathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8',
         'Content-Length': contents.length, 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
       });

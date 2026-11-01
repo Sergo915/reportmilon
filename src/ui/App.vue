@@ -2,31 +2,71 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import filters from '../report/filter.cjs';
 import chart from '../report/chart.cjs';
+import calendar from '../report/period.cjs';
+import amountInput from '../report/amount-input.cjs';
+import RangeInputs from './RangeInputs.vue';
+import filterIcon from '../../images/filter.png';
+import resetIcon from '../../images/reset.png';
+const { periods, periodRange } = calendar;
+const { formatAmountInput, ungroupAmount } = amountInput;
 const { chartScale, fullAmount, shortAmount, updatedTime } = chart;
 const { calculate, roomOptions, reconcileRooms, toggleRoom, validateRange } = filters;
 const mode = ref('rooms'), report = ref(null), loading = ref(false), failed = ref(false);
 const updatedAt = ref(null), dialog = ref(null), problemButton = ref(null);
 const months = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
 const fields = { rooms: 'Սենյակների քանակ', date: 'Կնքման ամսաթիվ', amount: 'Ընդհանուր արժեք', area: 'Մակերես (մ²)', currency: 'Արժույթ' };
-const filterFields = { ...fields, amount: 'Բնակարանի ընդհանուր արժեք' };
+const filterFields = { ...fields, amount: 'Բնակարանի արժեք (֏)', date: 'Կնքման ժամանակահատված' };
 const reasons = { missing: 'Լրացված չէ', invalid: 'Անվավեր արժեք', unsupported_currency: 'Աջակցվում է միայն AMD' };
 const availableRooms = ref([]), selectedRooms = ref([]);
-const ranges = reactive(Object.fromEntries(['amount', 'area', 'date'].map((kind) => [kind, {
-  draft: { min: '', max: '' }, applied: { min: null, max: null }, errors: {}, badInput: {},
-}])));
+const emptyRange = () => ({ draft: { min: '', max: '' }, applied: { min: null, max: null }, errors: {}, badInput: {} });
+const ranges = reactive(Object.fromEntries(['amount', 'area', 'date'].map((kind) => [kind, emptyRange()])));
+const selectedPeriod = ref('year'), presetRange = ref(periodRange('year')), dateRevision = ref(0);
+const selectedComplexes = ref(['tower', 'hills']);
+const complexes = [['tower', 'Թաուեր'], ['hills', 'Հիլլս']];
+const allRooms = ref(true);
 const disabled = computed(() => loading.value || failed.value || !report.value);
 const filtered = computed(() => calculate(report.value?.deals || [], report.value?.year, {
-  rooms: selectedRooms.value, ...Object.fromEntries(Object.entries(ranges).map(([kind, range]) => [kind, range.applied])),
+  rooms: selectedRooms.value, complexes: selectedComplexes.value,
+  amount: ranges.amount.applied, area: ranges.area.applied,
+  date: selectedPeriod.value === 'custom' ? ranges.date.applied : presetRange.value,
 }));
 const categories = computed(() => report.value ? filtered.value[mode.value] : []);
-const errorText = (code) => code === 'reversed' ? 'Սկզբնական արժեքը չպետք է գերազանցի վերջնական արժեքը' : 'Անվավեր արժեք';
-// An unfinished native date has an empty value too; keep its visible segments.
-const emptyDate = (side) => !ranges.date.draft[side] && !ranges.date.badInput[side];
+function updatePeriod() {
+  if (selectedPeriod.value !== 'custom') presetRange.value = periodRange(selectedPeriod.value);
+}
+function toggleComplex(value) {
+  if (!selectedComplexes.value.includes(value)) selectedComplexes.value = [...selectedComplexes.value, value];
+  else if (selectedComplexes.value.length > 1) selectedComplexes.value = selectedComplexes.value.filter((key) => key !== value);
+}
+function selectAllRooms() {
+  allRooms.value = true;
+  selectedRooms.value = [...availableRooms.value];
+}
+function selectRoom(room) {
+  selectedRooms.value = toggleRoom(selectedRooms.value, room, allRooms.value ? availableRooms.value : undefined);
+  allRooms.value = false;
+}
+function resetFilters() {
+  selectedPeriod.value = 'year'; updatePeriod();
+  selectedComplexes.value = ['tower', 'hills'];
+  selectAllRooms();
+  for (const kind of Object.keys(ranges)) ranges[kind] = emptyRange();
+  dateRevision.value++;
+}
 function editRange(kind, side, event) {
-  const range = ranges[kind];
-  range.draft[side] = event.target.value;
-  range.badInput[side] = event.target.validity.badInput;
-  const result = validateRange(kind, range.draft, range.badInput);
+  const range = ranges[kind], input = event.target;
+  let text = input.value;
+  if (kind === 'amount') {
+    const formatted = formatAmountInput(text, input.selectionStart, input.selectionEnd);
+    text = formatted.text;
+    input.value = text;
+    input.setSelectionRange(formatted.start, formatted.end);
+  }
+  range.draft[side] = text;
+  range.badInput[side] = input.validity.badInput;
+  const draft = kind === 'amount'
+    ? Object.fromEntries(Object.entries(range.draft).map(([key, value]) => [key, ungroupAmount(value)])) : range.draft;
+  const result = validateRange(kind, draft, range.badInput);
   range.errors = result.errors;
   if (result.valid) range.applied = result.values;
 }
@@ -75,9 +115,11 @@ async function refresh(force = true) {
     if (!response.ok) throw new Error();
     const snapshot = await response.json();
     const available = roomOptions(snapshot.deals);
-    selectedRooms.value = reconcileRooms(availableRooms.value, selectedRooms.value, available);
+    if (!available.length || !selectedRooms.value.some(room => available.includes(room))) allRooms.value = true;
+    selectedRooms.value = allRooms.value ? [...available] : reconcileRooms(availableRooms.value, selectedRooms.value, available);
     availableRooms.value = available;
     report.value = snapshot;
+    updatePeriod();
     updatedAt.value = new Date(snapshot.updatedAt);
   } catch { failed.value = true; }
   finally { loading.value = false; }
@@ -90,45 +132,61 @@ onMounted(() => refresh(false));
     <section aria-label="Գործարքների հաշվետվություն" class="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header class="report-header">
         <p class="report-header-label">Հաշվետվություններ</p>
-        <hr data-testid="header-divider" aria-hidden="true">
-        <p class="report-header-category">ԱՆՇԱՐԺ ԳՈՒՅՔԻ՝ ԲՆԱԿԱՐԱՆՆԵՐԻ ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ</p>
         <h1>Կնքված բնակարանների հաշվետվություն</h1>
+        <hr data-testid="header-divider" aria-hidden="true">
       </header>
+      <div class="filter-container">
       <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled }" aria-label="Զտիչներ" @submit.prevent>
         <p v-if="disabled" class="filter-notice" role="status">Հաշվետվությունների թարմացման պատճառով զտիչների կարգավորումը ժամանակավորապես անհասանելի է։</p>
         <div v-show="!disabled" aria-label="Զտիչների տարածք">
+          <div class="filter-heading">
+            <h2><span class="filter-icon" :style="{ maskImage: `url(${filterIcon})` }" aria-hidden="true"></span>Զտիչներ</h2>
+            <button type="button" :disabled="disabled" @click="resetFilters"><span class="filter-icon reset-icon" :style="{ maskImage: `url(${resetIcon})` }" aria-hidden="true"></span>Վերականգնել</button>
+          </div>
           <div class="filter-row">
+            <div class="filter-first-row">
+            <fieldset class="date-filter" :disabled="disabled">
+              <legend>{{ filterFields.date }}</legend>
+              <div class="period-select">
+              <select v-model="selectedPeriod" :aria-label="filterFields.date" @change="updatePeriod">
+                <option v-for="[value, title] in periods" :key="value" :value="value">{{ title }}</option>
+              </select>
+              <span class="select-arrow" aria-hidden="true"></span>
+              </div>
+              <div v-show="selectedPeriod === 'custom'" class="custom-period">
+                <RangeInputs :key="dateRevision" kind="date" :title="filterFields.date" :range="ranges.date"
+                  @edit="(side, event) => editRange('date', side, event)" />
+              </div>
+            </fieldset>
+            <fieldset :disabled="disabled">
+              <legend>Համալիր</legend>
+              <div class="complex-buttons">
+                <button v-for="[value, title] in complexes" :key="value" type="button"
+                  :aria-pressed="selectedComplexes.includes(value)" @click="toggleComplex(value)">{{ title }}</button>
+              </div>
+            </fieldset>
             <fieldset class="room-filter" :disabled="disabled">
               <legend>{{ fields.rooms }}</legend>
               <div class="room-buttons">
+                <button class="all-rooms" type="button" :aria-pressed="allRooms"
+                  @click="selectAllRooms">Բոլորը</button>
                 <button v-for="room in availableRooms" :key="room" type="button"
-                  :aria-pressed="selectedRooms.includes(room)" :aria-label="`${fields.rooms}՝ ${room}`"
-                  @click="selectedRooms = toggleRoom(selectedRooms, room)">{{ room }}</button>
+                  :aria-pressed="!allRooms && selectedRooms.includes(room)" :aria-label="`${fields.rooms}՝ ${room}`"
+                  @click="selectRoom(room)">{{ room }}</button>
               </div>
             </fieldset>
-            <fieldset v-for="kind in ['amount', 'area', 'date']" :key="kind" :disabled="disabled" class="range-filter" :class="{ 'date-filter': kind === 'date' }">
-              <legend>{{ kind === 'area' ? 'Մակերես' : filterFields[kind] }}</legend>
-              <div class="range-inputs">
-                <div v-for="side in ['min', 'max']" :key="side" class="range-control" :class="{ 'has-unit': kind !== 'date' }">
-                  <input :id="`${kind}-${side}`" :type="kind === 'date' ? 'date' : 'text'"
-                    :class="{ 'date-empty': kind === 'date' && emptyDate(side) }"
-                    :placeholder="kind === 'date' ? undefined : side === 'min' ? 'Սկսած' : 'Մինչև'"
-                    :inputmode="kind === 'date' ? undefined : 'decimal'"
-                    :aria-label="`${filterFields[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`"
-                    :aria-invalid="!!ranges[kind].errors[side]"
-                    :aria-describedby="ranges[kind].errors[side] ? `${kind}-error` : undefined"
-                    @keyup="kind === 'date' && editRange(kind, side, $event)"
-                    @blur="kind === 'date' && editRange(kind, side, $event)"
-                    :value="ranges[kind].draft[side]" @input="editRange(kind, side, $event)" />
-                  <span v-if="kind === 'date' && emptyDate(side)" class="date-placeholder" aria-hidden="true">{{ side === 'min' ? 'Սկսած' : 'Մինչև' }}</span>
-                  <span v-if="kind !== 'date'" class="range-unit" aria-hidden="true">{{ kind === 'amount' ? '֏' : '(մ²)' }}</span>
-                </div>
-              </div>
-              <p v-if="Object.keys(ranges[kind].errors).length" :id="`${kind}-error`" class="filter-error" role="alert">{{ errorText(Object.values(ranges[kind].errors)[0]) }}</p>
+            </div>
+            <div class="filter-second-row">
+            <fieldset v-for="kind in ['area', 'amount']" :key="kind" :disabled="disabled" class="range-filter">
+              <legend>{{ filterFields[kind] }}</legend>
+              <RangeInputs :kind="kind" :title="filterFields[kind]" :range="ranges[kind]"
+                @edit="(side, event) => editRange(kind, side, event)" />
             </fieldset>
+            </div>
           </div>
         </div>
       </form>
+      </div>
       <div class="flex flex-col items-center gap-3 border-b border-slate-100 px-3 py-5 sm:px-6">
         <p class="text-sm font-medium text-slate-600">Ցուցադրություն</p>
         <div role="group" aria-label="Խմբավորում" class="flex max-w-full rounded-xl bg-slate-100 p-1">

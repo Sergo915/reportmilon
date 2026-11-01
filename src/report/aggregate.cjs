@@ -1,4 +1,5 @@
 const { apartmentItems } = require('./apartments.cjs');
+const { complexField } = require('./complex.cjs');
 const missing = (value) => value == null || (typeof value === 'string' && !value.trim());
 
 const { decimal, decimalText, roomsValue, calendarDate, calculate } = require('./filter.cjs');
@@ -12,6 +13,7 @@ function aggregate({ items, fields }, { portalOrigin, now = new Date() }) {
   const roomField = fields.find((f) => f.title === 'Սենյակների քանակ').code;
   const dateField = fields.find((f) => f.title === 'Կնքման ամսաթիվ').code;
   const areaField = fields.find((f) => f.title === 'Մակերես (մ²)').code;
+  const complex = complexField(fields);
   const year = currentYear(now);
   const problems = new Map();
   const deals = [];
@@ -37,7 +39,7 @@ function aggregate({ items, fields }, { portalOrigin, now = new Date() }) {
       id: Number(item.id), url: `${origin.origin}/crm/deal/details/${Number(item.id)}/`, reasons,
     });
     if (reasons.length) continue;
-    deals.push({ rooms, amount: decimalText(amount), area: decimalText(area), date: item[dateField].trim().slice(0, 10) });
+    deals.push({ rooms, amount: decimalText(amount), area: decimalText(area), date: item[dateField].trim().slice(0, 10), complex: complex.value(item[complex.code]) });
   }
   return { year, ...calculate(deals, year),
     problems: [...problems.values()].sort((a, b) => a.id - b.id), deals };

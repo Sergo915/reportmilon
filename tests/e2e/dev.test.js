@@ -15,10 +15,11 @@ async function stopChild() {
 }
 
 beforeEach(async () => {
+  await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   const project = path.resolve(__dirname, '../..');
   await fs.mkdir(path.join(project, 'test-results'), { recursive: true });
   root = await fs.mkdtemp(path.join(project, 'test-results/dev-'));
-  for (const file of ['src', 'scripts/dev.cjs', 'server.js', 'vite.config.mjs', 'index.html', 'package.json', '.gitignore']) {
+  for (const file of ['src', 'images', 'scripts/dev.cjs', 'server.js', 'vite.config.mjs', 'index.html', 'package.json', '.gitignore']) {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.cp(path.join(project, file), path.join(root, file), { recursive: true });
   }
@@ -48,7 +49,8 @@ test('saving UI and shared calculation code rebuilds and refreshes the open repo
   const filterPath = path.join(root, 'src/report/filter.cjs');
   const filter = await fs.readFile(filterPath, 'utf8');
   await fs.writeFile(filterPath, filter.replace('count: 0 });', 'count: 10 });'));
-  await page.getByTestId('total-count').filter({ hasText: 'Գործարքների քանակ՝ 63' }).waitFor();
+  // Six room buckets plus the two eligible deals in the default current year.
+  await page.getByTestId('total-count').filter({ hasText: 'Գործարքների քանակ՝ 62' }).waitFor();
   expect(errors).toEqual([]);
   for (const route of ['/.env', '/src/ui/App.vue', '/server.js']) {
     expect((await page.request.get(new URL(route, page.url()).href)).status()).toBe(404);
