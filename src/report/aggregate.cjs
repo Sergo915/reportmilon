@@ -39,7 +39,8 @@ function aggregate({ items, fields }, { portalOrigin, now = new Date() }) {
       id: Number(item.id), url: `${origin.origin}/crm/deal/details/${Number(item.id)}/`, reasons,
     });
     if (reasons.length) continue;
-    deals.push({ rooms, amount: decimalText(amount), area: decimalText(area), date: item[dateField].trim().slice(0, 10), complex: complex.value(item[complex.code]) });
+    deals.push({ id: Number(item.id), url: `${origin.origin}/crm/deal/details/${Number(item.id)}/`,
+      rooms, amount: decimalText(amount), area: decimalText(area), date: item[dateField].trim().slice(0, 10), complex: complex.value(item[complex.code]) });
   }
   return { year, ...calculate(deals, year),
     problems: [...problems.values()].sort((a, b) => a.id - b.id), deals };

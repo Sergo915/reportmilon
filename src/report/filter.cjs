@@ -17,6 +17,7 @@ function add(a, b) {
     + b.coefficient * 10n ** BigInt(scale - b.scale), scale };
 }
 function decimalText({ coefficient, scale }) {
+  if (coefficient < 0n) return `-${decimalText({ coefficient: -coefficient, scale })}`;
   const digits = coefficient.toString().padStart(scale + 1, '0');
   return scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, '') : digits;
 }
@@ -91,14 +92,19 @@ function within(value, range, kind) {
   return (range.min == null || comparison(range.min) >= 0)
     && (range.max == null || comparison(range.max) <= 0);
 }
-function calculate(deals, year, { rooms = roomOptions(deals), amount, area, date, complexes } = {}) {
+function filterDeals(deals, { rooms, amount, area, date, dateRanges, complexes } = {}) {
+  const selectedRooms = rooms && new Set(rooms);
+  return deals.filter(deal => (!selectedRooms || selectedRooms.has(deal.rooms))
+    && within(deal.amount, amount) && within(deal.area, area) && within(deal.date, date, 'date')
+    && (!dateRanges || dateRanges.some(range => within(deal.date, range, 'date')))
+    && (!complexes || complexes.includes(deal.complex)));
+}
+function calculate(deals, year, { rooms = roomOptions(deals), ...options } = {}) {
   const bucket = (category) => ({ category, amount: { coefficient: 0n, scale: 0 }, count: 0 });
   const roomBuckets = new Map([...rooms].sort((a, b) => a - b).map((room) => [room, bucket(room)]));
   const months = Array.from({ length: 12 }, (_, i) => bucket(i + 1));
   const include = (entry, value) => { entry.amount = add(entry.amount, value); entry.count++; };
-  for (const deal of deals) {
-    if (!roomBuckets.has(deal.rooms) || !within(deal.amount, amount) || !within(deal.area, area)
-      || !within(deal.date, date, 'date') || (complexes && !complexes.includes(deal.complex))) continue;
+  for (const deal of filterDeals(deals, { ...options, rooms })) {
     const value = decimal(deal.amount);
     include(roomBuckets.get(deal.rooms), value);
     if (Number(deal.date.slice(0, 4)) === year) include(months[Number(deal.date.slice(5, 7)) - 1], value);
@@ -106,5 +112,5 @@ function calculate(deals, year, { rooms = roomOptions(deals), amount, area, date
   const serialize = (entry) => ({ ...entry, amount: decimalText(entry.amount) });
   return { rooms: [...roomBuckets.values()].map(serialize), months: months.map(serialize) };
 }
-module.exports = { decimal, decimalText, roomsValue, calendarDate, compare, roomOptions,
-  reconcileRooms, toggleRoom, validateRange, calculate };
+module.exports = { decimal, decimalText, add, roomsValue, calendarDate, compare, roomOptions,
+  reconcileRooms, toggleRoom, validateRange, filterDeals, calculate };

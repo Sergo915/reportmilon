@@ -20,7 +20,7 @@ test('strict base snapshot and normalized minimal data', () => {
     [7, [{ field: 'rooms', code: 'missing' }]], [8, [{ field: 'amount', code: 'missing' }]],
   ]);
   expect(result.deals).toHaveLength(4);
-  expect(result.deals[1]).toEqual({ rooms: 2, amount: '200.2', area: '65.5', date: '2026-06-15', complex: 'tower' });
+  expect(result.deals[1]).toEqual({ id: 2, url: 'https://portal.example/crm/deal/details/2/', rooms: 2, amount: '200.2', area: '65.5', date: '2026-06-15', complex: 'tower' });
 });
 test.each([undefined, null, '', ' ', 0, -1, false, true, [], {}, '65,5', 'Infinity'])('rejects area %p everywhere with reason', (value) => {
   const result = report([deal(1, { ufCrmArea: value })]);
@@ -92,4 +92,24 @@ test('selection reconciliation adds only new buttons, falls back, and prevents l
   expect(reconcileRooms([1, 2], [2], [])).toEqual([]);
   expect(reconcileRooms([], [], [1, 2])).toEqual([1, 2]);
   expect(toggleRoom([1], 1)).toEqual([1]); expect(toggleRoom([1, 2], 1)).toEqual([2]);
+});
+
+test.each([
+  ['month', [1, 3], ['2025-01-10', '2025-02-10', '2025-03-10', '2024-01-10']],
+  ['quarter', [1, 3], ['2025-01-10', '2025-04-10', '2025-07-10', '2025-10-10']],
+])('%s union excludes gaps, intersects all filters and preserves exact amounts and year axis', (period, values, dates) => {
+  const { periodRanges, calendarContext } = require('../../src/report/period.cjs');
+  const { calculate } = require('../../src/report/filter.cjs');
+  const deals = dates.map((date, i) => ({ date, rooms: 2, complex: 'tower', area: '60', amount: ['0.1', '20', '0.2', '40'][i] }));
+  const dateRanges = periodRanges(period, calendarContext([], new Date('2026-05-15')), { year: 2025, values });
+  const options = { dateRanges, rooms: [2], complexes: ['tower'], area: { min: '60', max: '60' }, amount: { max: '1' } };
+  const result = calculate(deals, 2026, options);
+  expect(result.rooms).toEqual([{ category: 2, amount: '0.3', count: 2 }]);
+  expect(result.months).toHaveLength(12);
+  expect(result.months.every(row => row.count === 0)).toBe(true);
+  for (const override of [{ complexes: ['hills'] }, { rooms: [1] }, { area: { min: '61' } }, { amount: { min: '1' } }, { dateRanges: [] }]) {
+    expect(calculate(deals, 2026, { ...options, ...override }).rooms.every(row => row.count === 0)).toBe(true);
+  }
+  // Overlapping intervals still count each deal once.
+  expect(calculate(deals, 2026, { ...options, dateRanges: [...dateRanges, ...dateRanges] }).rooms).toEqual(result.rooms);
 });

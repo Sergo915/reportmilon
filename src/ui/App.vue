@@ -5,34 +5,83 @@ import chart from '../report/chart.cjs';
 import calendar from '../report/period.cjs';
 import amountInput from '../report/amount-input.cjs';
 import RangeInputs from './RangeInputs.vue';
+import KpiCard from './KpiCard.vue';
+import KpiDealsDialog from './KpiDealsDialog.vue';
+import kpi from '../report/kpi.cjs';
 import filterIcon from '../../images/filter.png';
 import resetIcon from '../../images/reset.png';
-const { periods, periodRange } = calendar;
+const { periods, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges } = calendar;
 const { formatAmountInput, ungroupAmount } = amountInput;
 const { chartScale, fullAmount, shortAmount, updatedTime } = chart;
 const { calculate, roomOptions, reconcileRooms, toggleRoom, validateRange } = filters;
 const mode = ref('rooms'), report = ref(null), loading = ref(false), failed = ref(false);
 const updatedAt = ref(null), dialog = ref(null), problemButton = ref(null);
+const kpiDialog = ref(null);
 const months = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
 const fields = { rooms: 'Սենյակների քանակ', date: 'Կնքման ամսաթիվ', amount: 'Ընդհանուր արժեք', area: 'Մակերես (մ²)', currency: 'Արժույթ' };
 const filterFields = { ...fields, amount: 'Բնակարանի արժեք (֏)', date: 'Կնքման ժամանակահատված' };
 const reasons = { missing: 'Լրացված չէ', invalid: 'Անվավեր արժեք', unsupported_currency: 'Աջակցվում է միայն AMD' };
 const availableRooms = ref([]), selectedRooms = ref([]);
+const quarterRoomRows = computed(() => Array.from({ length: Math.ceil(availableRooms.value.length / 3) },
+  (_, index) => availableRooms.value.slice(index * 3, index * 3 + 3)));
 const emptyRange = () => ({ draft: { min: '', max: '' }, applied: { min: null, max: null }, errors: {}, badInput: {} });
 const ranges = reactive(Object.fromEntries(['amount', 'area', 'date'].map((kind) => [kind, emptyRange()])));
-const selectedPeriod = ref('year'), presetRange = ref(periodRange('year')), dateRevision = ref(0);
+const selectedPeriod = ref('year'), dateRevision = ref(0);
+const stackedFilters = computed(() => ['month', 'quarter', 'year', 'custom'].includes(selectedPeriod.value));
+const periodContext = ref(calendarContext());
+const periodSelections = ref(initialSelections(periodContext.value));
+const activeSelection = computed(() => periodSelections.value[selectedPeriod.value]);
+const presetRanges = computed(() => selectedPeriod.value === 'custom' ? undefined
+  : periodRanges(selectedPeriod.value, periodContext.value, activeSelection.value));
+const periodValues = computed(() => selectedPeriod.value === 'month' ? months : ['I', 'II', 'III', 'IV']);
+const monthBulkSelected = ref(false);
+const availableMonths = computed(() => Array.from({ length: periodSelections.value.month?.year === periodContext.value.year
+  ? periodContext.value.month : 12 }, (_, index) => index + 1));
+const clearMonths = computed(() => availableMonths.value.every(month => periodSelections.value.month?.values.includes(month))
+  && (availableMonths.value.length > 1 || monthBulkSelected.value));
 const selectedComplexes = ref(['tower', 'hills']);
 const complexes = [['tower', 'Թաուեր'], ['hills', 'Հիլլս']];
 const allRooms = ref(true);
 const disabled = computed(() => loading.value || failed.value || !report.value);
-const filtered = computed(() => calculate(report.value?.deals || [], report.value?.year, {
+const appliedFilters = computed(() => ({
   rooms: selectedRooms.value, complexes: selectedComplexes.value,
   amount: ranges.amount.applied, area: ranges.area.applied,
-  date: selectedPeriod.value === 'custom' ? ranges.date.applied : presetRange.value,
+  date: selectedPeriod.value === 'custom' ? ranges.date.applied : undefined,
+  dateRanges: presetRanges.value,
 }));
+const filtered = computed(() => calculate(report.value?.deals || [], report.value?.year, appliedFilters.value));
+const kpiResetRevision = ref(0);
+const kpiData = computed(() => report.value ? kpi.calculateKpis(report.value.deals, {
+  period: selectedPeriod.value, context: periodContext.value, selection: activeSelection.value,
+  custom: ranges.date.applied, filters: appliedFilters.value,
+}) : null);
 const categories = computed(() => report.value ? filtered.value[mode.value] : []);
 function updatePeriod() {
-  if (selectedPeriod.value !== 'custom') presetRange.value = periodRange(selectedPeriod.value);
+  periodContext.value = calendarContext(report.value?.deals || []);
+  periodSelections.value = reconcileSelections(periodSelections.value, periodContext.value);
+  const period = selectedPeriod.value;
+  if (Object.hasOwn(periodSelections.value, period) && !periodSelections.value[period]) {
+    periodSelections.value[period] = defaultSelection(period, periodContext.value);
+  }
+}
+function futurePeriod(value) {
+  return activeSelection.value?.year === periodContext.value.year && value > periodContext.value[selectedPeriod.value];
+}
+function selectPeriodValue(value) {
+  if (selectedPeriod.value === 'month') monthBulkSelected.value = false;
+  updatePeriod();
+  if (!futurePeriod(value)) activeSelection.value.values = togglePeriodValue(activeSelection.value.values, value);
+}
+function changePeriodYear() {
+  if (selectedPeriod.value === 'month') monthBulkSelected.value = false;
+  updatePeriod();
+}
+function toggleAllMonths() {
+  const clear = clearMonths.value;
+  updatePeriod();
+  activeSelection.value.values = clear ? [periodContext.value.month] : [...availableMonths.value];
+  // In January All and Clear have the same selection, but still alternate actions.
+  monthBulkSelected.value = !clear;
 }
 function toggleComplex(value) {
   if (!selectedComplexes.value.includes(value)) selectedComplexes.value = [...selectedComplexes.value, value];
@@ -47,6 +96,9 @@ function selectRoom(room) {
   allRooms.value = false;
 }
 function resetFilters() {
+  kpiResetRevision.value++;
+  monthBulkSelected.value = false;
+  periodSelections.value = initialSelections(calendarContext());
   selectedPeriod.value = 'year'; updatePeriod();
   selectedComplexes.value = ['tower', 'hills'];
   selectAllRooms();
@@ -109,7 +161,7 @@ function backdrop(event) {
 }
 async function refresh(force = true) {
   if (loading.value) return;
-  closeProblems(); report.value = null; failed.value = false; loading.value = true;
+  closeProblems(); kpiDialog.value?.close(); report.value = null; failed.value = false; loading.value = true;
   try {
     const response = await fetch(force ? '/api/report?refresh=1' : '/api/report', { cache: 'no-store' });
     if (!response.ok) throw new Error();
@@ -136,7 +188,7 @@ onMounted(() => refresh(false));
         <hr data-testid="header-divider" aria-hidden="true">
       </header>
       <div class="filter-container">
-      <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled }" aria-label="Զտիչներ" @submit.prevent>
+      <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled, 'stacked-filters': stackedFilters, 'month-filter': selectedPeriod === 'month', 'quarter-filter': selectedPeriod === 'quarter' }" aria-label="Զտիչներ" @submit.prevent>
         <p v-if="disabled" class="filter-notice" role="status">Հաշվետվությունների թարմացման պատճառով զտիչների կարգավորումը ժամանակավորապես անհասանելի է։</p>
         <div v-show="!disabled" aria-label="Զտիչների տարածք">
           <div class="filter-heading">
@@ -152,6 +204,25 @@ onMounted(() => refresh(false));
                 <option v-for="[value, title] in periods" :key="value" :value="value">{{ title }}</option>
               </select>
               <span class="select-arrow" aria-hidden="true"></span>
+              </div>
+              <div v-if="activeSelection" class="period-details">
+                <div class="period-toolbar" :class="{ 'month-toolbar': selectedPeriod === 'month' }">
+                  <div class="period-select">
+                    <select v-model.number="activeSelection.year" aria-label="Տարի" @change="changePeriodYear">
+                      <option v-for="year in periodContext.years" :key="year" :value="year">{{ year }}</option>
+                    </select>
+                    <span class="select-arrow" aria-hidden="true"></span>
+                  </div>
+                  <button v-if="selectedPeriod === 'month'" class="month-all" type="button" @click="toggleAllMonths">
+                    {{ clearMonths ? 'Մաքրել' : 'Բոլորը' }}
+                  </button>
+                </div>
+                <div v-if="selectedPeriod !== 'year'" class="period-buttons" :class="{ 'month-grid': selectedPeriod === 'month' }" role="group"
+                  :aria-label="selectedPeriod === 'month' ? 'Ամիսներ' : 'Եռամսյակներ'">
+                  <button v-for="(title, index) in periodValues" :key="index" type="button"
+                    :aria-pressed="activeSelection.values.includes(index + 1)" :disabled="disabled || futurePeriod(index + 1)"
+                    @click="selectPeriodValue(index + 1)">{{ title }}</button>
+                </div>
               </div>
               <div v-show="selectedPeriod === 'custom'" class="custom-period">
                 <RangeInputs :key="dateRevision" kind="date" :title="filterFields.date" :range="ranges.date"
@@ -170,9 +241,20 @@ onMounted(() => refresh(false));
               <div class="room-buttons">
                 <button class="all-rooms" type="button" :aria-pressed="allRooms"
                   @click="selectAllRooms">Բոլորը</button>
-                <button v-for="room in availableRooms" :key="room" type="button"
-                  :aria-pressed="!allRooms && selectedRooms.includes(room)" :aria-label="`${fields.rooms}՝ ${room}`"
-                  @click="selectRoom(room)">{{ room }}</button>
+                <div class="room-values">
+                  <template v-if="selectedPeriod === 'quarter'">
+                    <div v-for="(row, index) in quarterRoomRows" :key="index" class="quarter-room-row">
+                      <button v-for="room in row" :key="room" type="button"
+                        :aria-pressed="!allRooms && selectedRooms.includes(room)" :aria-label="`${fields.rooms}՝ ${room}`"
+                        @click="selectRoom(room)">{{ room }}</button>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <button v-for="room in availableRooms" :key="room" type="button"
+                      :aria-pressed="!allRooms && selectedRooms.includes(room)" :aria-label="`${fields.rooms}՝ ${room}`"
+                      @click="selectRoom(room)">{{ room }}</button>
+                  </template>
+                </div>
               </div>
             </fieldset>
             </div>
@@ -186,6 +268,18 @@ onMounted(() => refresh(false));
           </div>
         </div>
       </form>
+      </div>
+      <div class="kpi-container" data-testid="kpi-container">
+      <div class="kpi-grid">
+        <KpiCard metric="count" title="Կնքված բնակարաններ" :data="kpiData" :period="selectedPeriod"
+          :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
+        <KpiCard metric="amount" title="Վաճառքի ընդհանուր արժեք" :data="kpiData" :period="selectedPeriod"
+          :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
+      </div>
+      <div v-if="!disabled && kpiData" class="kpi-dates" data-testid="kpi-dates">
+        <p>Ընտրված՝ {{ kpi.rangeText(kpiData.ranges.current) || 'Տվյալներ չկան' }}</p>
+        <p v-if="kpiData.ranges.previous">Համեմատություն՝ {{ kpi.rangeText(kpiData.ranges.previous) }}</p>
+      </div>
       </div>
       <div class="flex flex-col items-center gap-3 border-b border-slate-100 px-3 py-5 sm:px-6">
         <p class="text-sm font-medium text-slate-600">Ցուցադրություն</p>
@@ -203,10 +297,10 @@ onMounted(() => refresh(false));
         <button type="button" class="refresh-button"
           :disabled="loading" @click="refresh">Թարմացնել հաշվետվությունը</button>
       </div>
-      <div v-if="loading" role="status" class="flex min-h-96 items-center justify-center p-8 text-center text-slate-500">Տվյալները բեռնվում են…</div>
+      <div v-if="loading" role="status" aria-label="Գծապատկերի վիճակ" class="flex min-h-96 items-center justify-center p-8 text-center text-slate-500">Տվյալները բեռնվում են…</div>
       <div v-else-if="failed" role="alert" class="flex min-h-96 items-center justify-center p-8 text-center text-red-700">Չհաջողվեց բեռնել տվյալները։ Փորձեք կրկին։</div>
       <template v-else-if="report">
-        <p v-if="!hasData" role="status" class="pt-6 text-center text-slate-500">Տվյալներ չկան</p>
+        <p v-if="!hasData" role="status" aria-label="Գծապատկերի վիճակ" class="pt-6 text-center text-slate-500">Տվյալներ չկան</p>
         <div :ref="observeViewport" class="overflow-x-auto px-2 pt-4" aria-label="Գծապատկերի տարածք" tabindex="0">
           <svg v-if="categories.length" :viewBox="`0 0 ${width} 380`" :style="{ minWidth: `${width}px` }" class="block w-full" role="group" :aria-label="axisTitle">
             <g v-for="(tick, index) in scale.ticks" :key="index" data-testid="y-tick">
@@ -239,6 +333,7 @@ onMounted(() => refresh(false));
         </footer>
       </template>
     </section>
+    <KpiDealsDialog ref="kpiDialog" :data="kpiData" :unavailable="disabled" />
     <dialog ref="dialog" aria-labelledby="problems-title" @click="backdrop" @close="restoreFocus" @keydown="trapFocus"
       class="fixed inset-0 m-auto max-h-[80vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-2xl border-0 bg-white p-0 shadow-xl">
       <div class="sticky top-0 flex items-center justify-between gap-4 border-b border-slate-100 bg-white px-5 py-5">

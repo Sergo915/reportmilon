@@ -49,8 +49,8 @@ test('saving UI and shared calculation code rebuilds and refreshes the open repo
   const filterPath = path.join(root, 'src/report/filter.cjs');
   const filter = await fs.readFile(filterPath, 'utf8');
   await fs.writeFile(filterPath, filter.replace('count: 0 });', 'count: 10 });'));
-  // Six room buckets plus the two eligible deals in the default current year.
-  await page.getByTestId('total-count').filter({ hasText: 'Գործարքների քանակ՝ 62' }).waitFor();
+  // Six room buckets plus one deal through today; the December sale is still in the future.
+  await page.getByTestId('total-count').filter({ hasText: 'Գործարքների քանակ՝ 61' }).waitFor();
   expect(errors).toEqual([]);
   for (const route of ['/.env', '/src/ui/App.vue', '/server.js']) {
     expect((await page.request.get(new URL(route, page.url()).href)).status()).toBe(404);

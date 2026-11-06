@@ -4,7 +4,7 @@ const { createFixture, deal } = require('../support/crm-fixture.cjs');
 let fixture, server, url;
 const period = () => page.getByRole('combobox', { name: 'Կնքման ժամանակահատված', exact: true });
 const reset = () => page.getByRole('button', { name: 'Վերականգնել', exact: true });
-const all = () => page.getByRole('button', { name: 'Բոլորը', exact: true });
+const all = () => page.locator('.room-filter').getByRole('button', { name: 'Բոլորը', exact: true });
 const room = n => page.getByRole('button', { name: `Սենյակների քանակ՝ ${n}`, exact: true });
 const tower = () => page.getByRole('button', { name: 'Թաուեր', exact: true });
 const hills = () => page.getByRole('button', { name: 'Հիլլս', exact: true });
@@ -32,7 +32,7 @@ test('global defaults, all five intersecting filters, complex last selection and
   await page.goto(url); await ready();
   expect(await period().inputValue()).toBe('year');
   expect(await period().locator('option').allTextContents()).toEqual([
-    'Ընթացիկ ամիս', 'Անցյալ ամիս', 'Ընթացիկ եռամսյակ', 'Ընթացիկ տարի', 'Վերջին 12 ամիս', 'Ամբողջ ժամանակահատված', 'Կամայական միջակայք',
+    'Ամիս', 'Եռամսյակ', 'Տարի', 'Վերջին 12 ամիս', 'Ամբողջ ժամանակահատված', 'Կամայական միջակայք',
   ]);
   for (const button of [tower(), hills(), all()]) expect(await button.getAttribute('aria-pressed')).toBe('true');
   expect(await input('date', 'min').isVisible()).toBe(false);
@@ -70,7 +70,7 @@ test('global defaults, all five intersecting filters, complex last selection and
 
 test('every preset applies, custom values and invalid drafts survive preset switches, and monthly axis stays unchanged', async () => {
   await page.goto(url); await ready();
-  for (const [value, expected] of [['month', 2], ['previous-month', 1], ['quarter', 3], ['year', 3], ['last-12', 4], ['all', 4]]) {
+  for (const [value, expected] of [['month', 2], ['quarter', 3], ['year', 3], ['last-12', 4], ['all', 4]]) {
     await period().selectOption(value); await count(expected);
   }
   await period().selectOption('custom'); await count(4);
@@ -82,6 +82,8 @@ test('every preset applies, custom values and invalid drafts survive preset swit
   expect(await page.getByRole('alert').count()).toBe(0);
   expect(await input('date', 'min').isVisible()).toBe(false);
   await period().focus(); await period().press('Tab');
+  expect(await page.getByRole('combobox', { name: 'Տարի', exact: true }).evaluate(el => document.activeElement === el)).toBe(true);
+  await page.keyboard.press('Tab');
   expect(await tower().evaluate(el => document.activeElement === el)).toBe(true);
   await period().selectOption('custom');
   expect(await input('date', 'min').inputValue()).toBe('2026-01-01');
@@ -131,11 +133,10 @@ test.each([1440, 1920])('wide panel has two rows and retains geometry with custo
     for (const b of boxes.slice(1, 3)) expect(Math.abs((b.y + b.bottom) / 2 - (boxes[0].y + boxes[0].bottom) / 2)).toBeLessThan(1);
     expect(new Set(boxes.slice(3).map(b => b.y)).size).toBe(1);
     expect(boxes[3].y).toBeGreaterThan(Math.max(...boxes.slice(0, 3).map(b => b.bottom)));
-    const selectBox = await period().boundingBox(), towerBox = await tower().boundingBox(), hillsBox = await hills().boundingBox();
-    const allBox = await all().boundingBox(), lastRoomBox = await panel.locator('.room-buttons button').last().boundingBox();
+    const selectBox = await period().boundingBox();
     const inset = selectBox.x - box.x;
-    for (const gap of [towerBox.x - selectBox.x - selectBox.width, allBox.x - hillsBox.x - hillsBox.width,
-      box.x + box.width - lastRoomBox.x - lastRoomBox.width]) expect(Math.abs(gap - inset)).toBeLessThan(1);
+    for (const gap of [boxes[1].x - boxes[0].x - boxes[0].width, boxes[2].x - boxes[1].x - boxes[1].width,
+      box.x + box.width - boxes[2].x - boxes[2].width]) expect(Math.abs(gap - inset)).toBeLessThan(1);
     expect(Math.abs(boxes[3].width - boxes[4].width)).toBeLessThan(1);
     const title = await panel.getByRole('heading', { name: 'Զտիչներ' }).boundingBox();
     const button = await reset().boundingBox();
@@ -203,11 +204,12 @@ test('filter icons load from bundled PNGs, controls share rounding and insets, a
   expect(await period().evaluate(el => getComputedStyle(el).outlineStyle)).toBe('none');
   expect(await period().evaluate(el => getComputedStyle(el).borderTopColor)).toBe('rgb(203, 213, 225)');
   const inset = await period().evaluate(el => parseFloat(getComputedStyle(el).paddingLeft) + parseFloat(getComputedStyle(el).borderLeftWidth));
-  const selectBox = await period().boundingBox(), arrowBox = await panel.locator('.select-arrow').boundingBox();
+  const selectBox = await period().boundingBox(), arrowBox = await panel.locator('.select-arrow').first().boundingBox();
   expect(Math.abs(selectBox.x + selectBox.width - arrowBox.x - arrowBox.width - inset)).toBeLessThan(1);
   const complex = panel.getByRole('group', { name: 'Համալիր', exact: true });
   const groupBox = await complex.boundingBox(), first = await tower().boundingBox(), last = await hills().boundingBox();
-  expect(Math.abs((first.x + last.x + last.width) / 2 - (groupBox.x + groupBox.width / 2))).toBeLessThan(1);
+  for (const control of [first, last]) expect(Math.abs(control.x + control.width / 2 - (groupBox.x + groupBox.width / 2))).toBeLessThan(1);
+  expect(last.y).toBeGreaterThan(first.y + first.height);
 });
 
 test('All visually clears room buttons without disabling them, including the single-room case', async () => {
