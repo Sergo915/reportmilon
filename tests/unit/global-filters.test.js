@@ -131,3 +131,37 @@ test('formatting keeps selection in the edited middle instead of at the end', ()
   expect(formatAmountInput('129 500 000', 3, 7)).toEqual({ text: '129 500 000', start: 3, end: 7 });
   expect(formatAmountInput('12500', 2)).toEqual({ text: '12 500', start: 2, end: 2 });
 });
+
+const { quickSelection, quickPeriods } = require('../../src/report/period.cjs');
+test.each([
+  ['current-month', '2026-11-01', '2026-11-15'], ['current-year', '2026-01-01', '2026-11-15'],
+  ['previous-month', '2026-10-01', '2026-10-31'], ['previous-year', '2025-01-01', '2025-12-31'],
+  ['last-12', '2025-12-01', '2026-11-15'], ['all', '2023-07-10', '2026-11-15'],
+])('quick %s includes only its exact inclusive boundaries', (value, min, max) => {
+  const calendar = context(undefined, [{ date: '2023-07-10' }]);
+  const resolved = quickSelection(value, calendar);
+  const dateRanges = periodRanges(resolved.period, calendar, resolved.selection);
+  expect(dateRanges).toEqual([{ min, max }]);
+  const offset = (date, days) => new Date(Date.parse(date) + days * 86400000).toISOString().slice(0, 10);
+  const deals = [offset(min, -1), min, max, offset(max, 1)].map(date => ({ date, rooms: 1, amount: '10', area: '50' }));
+  expect(calculate(deals, 2026, { dateRanges }).rooms[0]).toEqual({ category: 1, amount: '20', count: 2 });
+});
+test.each([
+  ['previous-month', '2027-01-15T10:00:00Z', '2026-12-01', '2026-12-31'],
+  ['previous-month', '2024-03-01T10:00:00Z', '2024-02-01', '2024-02-29'],
+  ['previous-month', '2025-03-01T10:00:00Z', '2025-02-01', '2025-02-28'],
+  ['current-month', '2026-12-31T19:59:59Z', '2026-12-01', '2026-12-31'],
+  ['current-month', '2026-12-31T20:00:00Z', '2027-01-01', '2027-01-01'],
+  ['previous-year', '2026-12-31T20:00:00Z', '2026-01-01', '2026-12-31'],
+])('quick %s respects calendar transitions at %s', (value, now, min, max) => {
+  const calendar = context(now), resolved = quickSelection(value, calendar);
+  expect(periodRanges(resolved.period, calendar, resolved.selection)).toEqual([{ min, max }]);
+});
+test('quick choices are ordered, independent of manual state, and available without history', () => {
+  expect(quickPeriods.map(([key]) => key)).toEqual(['current-month', 'current-year', 'previous-month', 'previous-year', 'last-12', 'all']);
+  const calendar = context(), state = initialSelections(calendar);
+  quickSelection('previous-year', calendar);
+  expect(state.year).toEqual({ year: 2026 });
+  expect(quickSelection('previous-year', calendar)).toEqual({ period: 'year', selection: { year: 2025 } });
+  expect(() => quickSelection('invalid', calendar)).toThrow('Unknown quick period');
+});

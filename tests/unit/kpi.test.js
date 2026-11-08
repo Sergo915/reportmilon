@@ -180,3 +180,20 @@ test.each([[[]], [[row('2027-01-01')]]])('no past history %j gives empty all-tim
   const twelve = run(deals, { period: 'last-12' });
   expect(twelve.current.count).toBe(0); expect(twelve.rankings.month.count).toHaveLength(12);
 });
+
+const { quickSelection } = require('../../src/report/period.cjs');
+test.each([
+  ['current-month', 'month', { year: 2026, values: [11] }],
+  ['current-year', 'year', { year: 2026 }],
+  ['previous-month', 'month', { year: 2026, values: [10] }],
+  ['previous-year', 'year', { year: 2025 }],
+  ['last-12', 'last-12', undefined], ['all', 'all', undefined],
+])('quick %s retains the complete KPI behavior of its calendar equivalent', (quick, period, selection) => {
+  const deals = ['2023-07-10', '2025-01-01', '2025-11-15', '2026-10-01', '2026-10-31', '2026-11-01', '2026-11-15']
+    .map(date => row(date));
+  deals.push(row('2026-11-10', '1000', { complex: 'hills' }));
+  const calendar = context(undefined, deals), filters = { complexes: ['tower'], area: { min: '50' } };
+  const resolved = quickSelection(quick, calendar);
+  expect(calculateKpis(deals, { ...resolved, context: calendar, filters }))
+    .toEqual(calculateKpis(deals, { period, selection, context: calendar, filters }));
+});

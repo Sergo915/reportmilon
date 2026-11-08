@@ -9,6 +9,19 @@ const delta = metric => card(metric).getByTestId('kpi-change');
 const button = name => page.getByRole('button', { name, exact: true });
 const period = () => page.getByRole('combobox', { name: 'Կնքման ժամանակահատված', exact: true });
 const year = () => page.getByRole('combobox', { name: 'Տարի', exact: true });
+const openMonths = async () => {
+  if (await period().inputValue() === 'month' && await page.getByRole('button', { name: 'Ամիսներ', exact: true }).getAttribute('aria-expanded') !== 'true')
+    await page.getByRole('button', { name: 'Ամիսներ', exact: true }).click();
+};
+const selectPeriod = async value => {
+  await page.keyboard.press('Escape');
+  if (['last-12', 'all'].includes(value)) {
+    await period().selectOption('quick');
+    await page.getByRole('combobox', { name: 'Արագ ընտրություն', exact: true }).selectOption(value);
+  } else await period().selectOption(value);
+};
+const selectYear = async value => { await year().selectOption(value); };
+
 const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի արժեք (֏)', area: 'Մակերես (մ²)', date: 'Կնքման ժամանակահատված' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
 const ready = () => page.locator('footer time').waitFor();
 const open = async () => { await page.goto(url); await ready(); };
@@ -19,7 +32,7 @@ const types = (metric, name) => card(metric).getByRole('button', { name, exact: 
 const dates = () => page.getByTestId('kpi-dates').getByText(/^Համեմատություն՝/);
 const monthNames = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
 async function selectUnits(kind, selectedYear, wanted) {
-  await period().selectOption(kind); await year().selectOption(String(selectedYear));
+  await selectPeriod(kind); await selectYear(String(selectedYear)); await openMonths();
   const group = page.getByRole('group', { name: kind === 'month' ? 'Ամիսներ' : 'Եռամսյակներ', exact: true });
   const labels = kind === 'month' ? monthNames : ['I', 'II', 'III', 'IV'];
   for (const n of wanted) {
@@ -58,7 +71,7 @@ test('both KPIs apply every filter to current, baseline and ranking without new 
     { ufCrmArea: null }, { ufCrmProperty: '72' },
   ]) fixture.state.items.push(deal(fixture.state.items.length + 1, { ufCrmDate: date, opportunity: '100', ...extra }));
   let requests = 0; page.on('request', request => { if (new URL(request.url()).pathname === '/api/report') requests++; });
-  await open(); await period().selectOption('month');
+  await open(); await selectPeriod('month');
   await button('Հիլլս').click(); await button('Սենյակների քանակ՝ 2').click();
   await input('area', 'min').fill('50'); await input('area', 'max').fill('50');
   await input('amount', 'min').fill('100'); await input('amount', 'max').fill('200');
@@ -69,7 +82,7 @@ test('both KPIs apply every filter to current, baseline and ranking without new 
   await input('amount', 'max').fill('100'); await expectValue('count', '1'); expect(await delta('count').innerText()).toBe('+1\n—');
   await input('amount', 'max').fill('200'); await input('area', 'min').fill('51'); await input('area', 'max').fill('60'); await expectValue('count', '0');
   await input('area', 'min').fill('50'); await input('area', 'max').fill('50');
-  await period().selectOption('all'); await expectValue('count', '3'); await expectValue('amount', '450 ֏');
+  await selectPeriod('all'); await expectValue('count', '3'); await expectValue('amount', '450 ֏');
   expect(await rows('count').first().innerText()).toMatch(/Նոյեմբեր 2026[\s\S]*2$/);
   await button('Կնքման ամսաթիվ').click(); await expectValue('amount', '450 ֏');
   await button('Վերականգնել').click(); expect(await period().inputValue()).toBe('year');
@@ -88,7 +101,7 @@ test('consecutive and nonconsecutive month and quarter selections show their dis
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.10.2024 – 31.03.2025');
   await selectUnits('quarter', 2025, [1, 3]); await expectValue('amount', '300 ֏');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2024 – 31.03.2024; 01.07.2024 – 30.09.2024');
-  await period().selectOption('year'); await year().selectOption('2025'); await expectValue('amount', '780 ֏');
+  await selectPeriod('year'); await selectYear('2025'); await expectValue('amount', '780 ֏');
   await button('Կնքման ամսաթիվ').click(); await expectValue('amount', '780 ֏');
   expect(await page.getByTestId('total-count').innerText()).toBe('Գործարքների քանակ՝ 0');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2024 – 31.12.2024');
@@ -101,7 +114,7 @@ test('partial month, quarter, year, consecutive block and separated units show m
     ['month', [10, 11], '01.08.2026 – 15.09.2026'], ['quarter', [2, 3, 4], '01.07.2025 – 15.02.2026'],
     ['month', [9, 11], '01.09.2025 – 30.09.2025; 01.11.2025 – 15.11.2025'],
   ]) { await selectUnits(kind, 2026, units); expect(await dates().innerText()).toBe(`Համեմատություն՝ ${expected}`); }
-  await period().selectOption('year'); expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2025 – 15.11.2025');
+  await selectPeriod('year'); expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2025 – 15.11.2025');
 });
 
 test('custom boundaries retain valid results on errors, support open and future intervals', async () => {
@@ -109,7 +122,7 @@ test('custom boundaries retain valid results on errors, support open and future 
     deal(2, { ufCrmDate: '2025-03-09', opportunity: '50' }), deal(3, { ufCrmDate: '2025-03-10', opportunity: '100' }),
     deal(4, { ufCrmDate: '2025-03-19', opportunity: '200' }), deal(5, { ufCrmDate: '2025-03-20', opportunity: '1000' }),
     deal(6, { ufCrmDate: '2027-01-01', opportunity: '9007199254740993.01' })];
-  await open(); await period().selectOption('custom');
+  await open(); await selectPeriod('custom');
   expect(await card('count').getByText('Համեմատության համար նշեք երկու ամսաթվերը։').isVisible()).toBe(true);
   await input('date', 'min').fill('2025-03-10'); await input('date', 'max').fill('2025-03-19');
   await expectValue('count', '2'); await expectValue('amount', '300 ֏');
@@ -129,7 +142,7 @@ test('rankings sort each metric independently and retain zero periods, equal ran
   for (const [date, n, amount] of [['2025-01-10', 10, '10'], ['2025-02-10', 8, '100'], ['2025-03-10', 8, '10'], ['2026-03-10', 2, '1000']]) {
     for (let i = 0; i < n; i++) fixture.state.items.push(deal(fixture.state.items.length + 1, { ufCrmDate: date, opportunity: amount }));
   }
-  await open(); await period().selectOption('all'); await expectValue('count', '28'); await expectValue('amount', '2,98 հազ. ֏');
+  await open(); await selectPeriod('all'); await expectValue('count', '28'); await expectValue('amount', '2,98 հազ. ֏');
   expect(await rows('count').evaluateAll(els => els.slice(0, 4).map(el => el.value))).toEqual([1, 2, 2, 4]);
   expect(await rows('count').nth(1).innerText()).toContain('Մարտ 2025');
   expect(await rows('count').nth(2).innerText()).toContain('Փետրվար 2025');
@@ -147,7 +160,7 @@ test('rankings sort each metric independently and retain zero periods, equal ran
 test('independent ranking memory, expansion, reset and grouping never request new data', async () => {
   fixture.state.items = history(); let requests = 0;
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/report') requests++; });
-  await open(); await period().selectOption('all');
+  await open(); await selectPeriod('all');
   expect(await rows('count').count()).toBe(5); expect(await rows('amount').count()).toBe(5);
   await types('count', 'Ցույց տալ բոլորը').click(); expect(await rows('count').count()).toBe(35); expect(await rows('amount').count()).toBe(5);
   expect(await types('count', 'Թաքցնել').getAttribute('aria-expanded')).toBe('true');
@@ -156,15 +169,15 @@ test('independent ranking memory, expansion, reset and grouping never request ne
   expect(await types('amount', 'Ամիսներ').getAttribute('aria-pressed')).toBe('true');
   await types('amount', 'Տարիներ').click(); expect(await rows('amount').count()).toBe(3);
   await types('count', 'Ցույց տալ բոլորը').click(); await input('area', 'min').fill('1'); expect(await rows('count').count()).toBe(5);
-  await period().selectOption('last-12'); expect(await card('count').getByRole('group', { name: /վարկանիշի ժամանակահատված/ }).count()).toBe(0);
+  await selectPeriod('last-12'); expect(await card('count').getByRole('group', { name: /վարկանիշի ժամանակահատված/ }).count()).toBe(0);
   await types('count', 'Ցույց տալ բոլորը').click(); expect(await rows('count').count()).toBe(12);
-  await period().selectOption('all'); expect(await types('count', 'Եռամսյակներ').getAttribute('aria-pressed')).toBe('true');
+  await selectPeriod('all'); expect(await types('count', 'Եռամսյակներ').getAttribute('aria-pressed')).toBe('true');
   expect(await types('amount', 'Տարիներ').getAttribute('aria-pressed')).toBe('true'); expect(await rows('count').count()).toBe(5);
-  await button('Վերականգնել').click(); await period().selectOption('all');
+  await button('Վերականգնել').click(); await selectPeriod('all');
   expect(await types('count', 'Ամիսներ').getAttribute('aria-pressed')).toBe('true'); expect(await types('amount', 'Ամիսներ').getAttribute('aria-pressed')).toBe('true');
   expect(requests).toBe(1); expect(fixture.state.reads).toBe(1);
   await types('count', 'Տարիներ').click(); await refresh(); expect(await types('count', 'Տարիներ').getAttribute('aria-pressed')).toBe('true');
-  await page.reload(); await ready(); await period().selectOption('all');
+  await page.reload(); await ready(); await selectPeriod('all');
   expect(await types('count', 'Ամիսներ').getAttribute('aria-pressed')).toBe('true');
 });
 
@@ -173,7 +186,7 @@ test('loading, failed refresh and recovery hide stale figures while preserving r
   await page.goto(url); await card('count').getByText('Տվյալները բեռնվում են…').waitFor();
   expect(await card('count').getAttribute('aria-busy')).toBe('true'); expect(await value('count').count()).toBe(0);
   release(); fixture.state.gate = null; await ready();
-  await period().selectOption('all'); await types('amount', 'Տարիներ').click();
+  await selectPeriod('all'); await types('amount', 'Տարիներ').click();
   fixture.state.gate = new Promise(resolve => { release = resolve; }); fixture.state.failPage = 0;
   await button('Թարմացնել հաշվետվությունը').click(); await card('amount').getByText('Տվյալները բեռնվում են…').waitFor();
   expect(await value('amount').count()).toBe(0); expect(await card('amount').getByRole('button').count()).toBe(0);
@@ -187,16 +200,16 @@ test('loading, failed refresh and recovery hide stale figures while preserving r
 test.each(['empty', 'problem', 'future'])('%s history has explicit zero and empty ranking states', async kind => {
   fixture.state.items = kind === 'empty' ? [] : [deal(1, { ufCrmDate: kind === 'future' ? '2027-01-01' : '2025-01-01', ...(kind === 'problem' ? { ufCrmArea: null } : {}) })];
   await open(); await expectValue('count', '0'); expect(await delta('count').innerText()).toBe('0\n0%');
-  await period().selectOption('all'); await card('count').getByText('Տվյալներ չկան', { exact: true }).first().waitFor();
+  await selectPeriod('all'); await card('count').getByText('Տվյալներ չկան', { exact: true }).first().waitFor();
   expect(await rows('count').count()).toBe(0); expect(await types('count', 'Տարիներ').isEnabled()).toBe(true);
-  await period().selectOption('last-12'); expect(await rows('count').count()).toBe(5);
+  await selectPeriod('last-12'); expect(await rows('count').count()).toBe(5);
   await types('count', 'Ցույց տալ բոլորը').click(); expect(await rows('count').count()).toBe(12);
   expect(await rows('count').evaluateAll(els => els.every(el => el.value === 1))).toBe(true);
 });
 
 test('zero current value against a nonzero baseline shows a decrease rather than missing data', async () => {
   fixture.state.items = [deal(1, { ufCrmDate: '2026-10-15', opportunity: '1.2' })];
-  await open(); await period().selectOption('month'); await expectValue('amount', '0 ֏');
+  await open(); await selectPeriod('month'); await expectValue('amount', '0 ֏');
   expect(await delta('amount').innerText()).toBe('-1,2 ֏\n-100%');
   expect(await card('amount').getByTestId('kpi-percentage').evaluate(el => getComputedStyle(el).color)).toBe('rgb(185, 28, 28)');
 });
@@ -289,7 +302,7 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await details().screenshot({ path: `test-results/kpi-details-${width}.png`, animations: 'disabled' });
   await closeDetails();
-  await period().selectOption('all'); await types('count', 'Եռամսյակներ').focus(); await page.keyboard.press('Enter');
+  await selectPeriod('all'); await types('count', 'Եռամսյակներ').focus(); await page.keyboard.press('Enter');
   expect(await types('count', 'Եռամսյակներ').getAttribute('aria-pressed')).toBe('true');
   const expand = types('count', 'Ցույց տալ բոլորը'); await expand.focus(); await page.keyboard.press('Enter');
   const collapse = types('count', 'Թաքցնել'); expect(await collapse.getAttribute('aria-expanded')).toBe('true');
@@ -312,7 +325,7 @@ test('both halves open the filtered current and baseline deals without navigatio
     { ufCrmArea: null }, { ufCrmProperty: '72' },
   ]) fixture.state.items.push(deal(fixture.state.items.length + 1, { ufCrmDate: date, opportunity: '100', ...extra }));
   let requests = 0; page.on('request', request => { if (new URL(request.url()).pathname === '/api/report') requests++; });
-  await open(); await period().selectOption('month');
+  await open(); await selectPeriod('month');
   await button('Հիլլս').click(); await button('Սենյակների քանակ՝ 2').click();
   await input('area', 'min').fill('50'); await input('area', 'max').fill('50');
   await input('amount', 'min').fill('100'); await input('amount', 'max').fill('200');
@@ -338,7 +351,7 @@ test('detail table paginates, sorts identical dates by hidden ID and resets page
     ufCrmDate: i === 50 ? '2026-11-15' : '2026-11-10', opportunity: '100',
   }));
   fixture.state.items.push(deal(52, { ufCrmDate: '2026-10-10', opportunity: '250' }));
-  await open(); await period().selectOption('month'); await openDetails('amount');
+  await open(); await selectPeriod('month'); await openDetails('amount');
   expect(await detailLinks().count()).toBe(50);
   expect(await detailLinks().nth(0).getAttribute('href')).toContain('/51/');
   expect(await detailLinks().nth(1).getAttribute('href')).toContain('/1/');
@@ -398,7 +411,7 @@ test('February X labels follow its 28 selected days while the January baseline k
 
 test('compact amounts appear in every KPI surface, with local delta colors and keyboard chart tooltips', async () => {
   fixture.state.items = [deal(1, { ufCrmDate: '2026-11-15', opportunity: '6158173250.9' })];
-  await open(); await period().selectOption('month'); await expectValue('amount', '6,16 մլրդ ֏');
+  await open(); await selectPeriod('month'); await expectValue('amount', '6,16 մլրդ ֏');
   expect(await delta('amount').innerText()).toBe('+6,16 մլրդ ֏\n—');
   expect(await delta('amount').evaluate(el => getComputedStyle(el).color)).toBe('rgb(24, 37, 61)');
   expect(await card('amount').getByTestId('kpi-percentage').evaluate(el => getComputedStyle(el).color)).toBe('rgb(21, 128, 61)');
@@ -410,7 +423,7 @@ test('compact amounts appear in every KPI surface, with local delta colors and k
   await point.click(); expect(await details().count()).toBe(0);
   await openDetails('amount'); expect(await details().innerText()).toContain('6,16 մլրդ ֏');
   expect(await details().getByRole('cell', { name: '6,16 մլրդ ֏', exact: true }).count()).toBe(1);
-  await closeDetails(); await period().selectOption('all');
+  await closeDetails(); await selectPeriod('all');
   expect(await rows('amount').first().innerText()).toContain('6,16 մլրդ ֏');
   expect(await card('amount').innerText()).not.toContain('173');
   await types('amount', 'Տարիներ').click(); expect(await details().count()).toBe(0);
@@ -420,7 +433,7 @@ test('last twelve months show two lines and matching detail baseline; all-time a
   fixture.state.items = [deal(1, { ufCrmDate: '2024-12-01', opportunity: '100' }), deal(2, { ufCrmDate: '2025-11-15', opportunity: '100' }),
     deal(3, { ufCrmDate: '2025-11-16', opportunity: '1000' }), deal(4, { ufCrmDate: '2025-12-01', opportunity: '200' }),
     deal(5, { ufCrmDate: '2026-11-15', opportunity: '200' }), deal(6, { ufCrmDate: '2026-11-16', opportunity: '1000' })];
-  await open(); await period().selectOption('last-12');
+  await open(); await selectPeriod('last-12');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.12.2024 – 15.11.2025');
   await expectValue('amount', '400 ֏'); expect(await delta('amount').innerText()).toBe('+200 ֏\n+100%');
   expect(await card('amount').getByTestId('kpi-line-0').count()).toBe(1);
@@ -432,7 +445,7 @@ test('last twelve months show two lines and matching detail baseline; all-time a
     'https://portal.example/crm/deal/details/2/', 'https://portal.example/crm/deal/details/1/',
   ]); await closeDetails();
   for (const mode of ['all', 'custom']) {
-    await period().selectOption(mode);
+    await selectPeriod(mode);
     expect(await card('amount').getByTestId('kpi-line-0').count()).toBe(1);
     expect(await card('amount').getByTestId('kpi-line-1').count()).toBe(0);
     expect(await dates().count()).toBe(0);

@@ -5,12 +5,13 @@ import chart from '../report/chart.cjs';
 import calendar from '../report/period.cjs';
 import amountInput from '../report/amount-input.cjs';
 import RangeInputs from './RangeInputs.vue';
+import MonthPicker from './MonthPicker.vue';
 import KpiCard from './KpiCard.vue';
 import KpiDealsDialog from './KpiDealsDialog.vue';
 import kpi from '../report/kpi.cjs';
 import filterIcon from '../../images/filter.png';
 import resetIcon from '../../images/reset.png';
-const { periods, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges } = calendar;
+const { periods, quickPeriods, quickSelection, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges } = calendar;
 const { formatAmountInput, ungroupAmount } = amountInput;
 const { chartScale, fullAmount, shortAmount, updatedTime } = chart;
 const { calculate, roomOptions, reconcileRooms, toggleRoom, validateRange } = filters;
@@ -27,18 +28,20 @@ const quarterRoomRows = computed(() => Array.from({ length: Math.ceil(availableR
 const emptyRange = () => ({ draft: { min: '', max: '' }, applied: { min: null, max: null }, errors: {}, badInput: {} });
 const ranges = reactive(Object.fromEntries(['amount', 'area', 'date'].map((kind) => [kind, emptyRange()])));
 const selectedPeriod = ref('year'), dateRevision = ref(0);
-const stackedFilters = computed(() => ['month', 'quarter', 'year', 'custom'].includes(selectedPeriod.value));
+const selectedQuick = ref('current-month'), monthPicker = ref(null);
+const hasFilterErrors = computed(() => ['area', 'amount', ...(selectedPeriod.value === 'custom' ? ['date'] : [])]
+  .some(kind => Object.keys(ranges[kind].errors).length));
 const periodContext = ref(calendarContext());
 const periodSelections = ref(initialSelections(periodContext.value));
 const activeSelection = computed(() => periodSelections.value[selectedPeriod.value]);
+const effectivePeriod = computed(() => selectedPeriod.value === 'quick'
+  ? quickSelection(selectedQuick.value, periodContext.value)
+  : { period: selectedPeriod.value, selection: activeSelection.value });
+const stackedFilters = computed(() => !['last-12', 'all'].includes(effectivePeriod.value.period));
 const presetRanges = computed(() => selectedPeriod.value === 'custom' ? undefined
-  : periodRanges(selectedPeriod.value, periodContext.value, activeSelection.value));
-const periodValues = computed(() => selectedPeriod.value === 'month' ? months : ['I', 'II', 'III', 'IV']);
-const monthBulkSelected = ref(false);
-const availableMonths = computed(() => Array.from({ length: periodSelections.value.month?.year === periodContext.value.year
-  ? periodContext.value.month : 12 }, (_, index) => index + 1));
-const clearMonths = computed(() => availableMonths.value.every(month => periodSelections.value.month?.values.includes(month))
-  && (availableMonths.value.length > 1 || monthBulkSelected.value));
+  : periodRanges(effectivePeriod.value.period, periodContext.value, effectivePeriod.value.selection));
+const availableMonths = computed(() => periodSelections.value.month?.year === periodContext.value.year
+  ? periodContext.value.month : 12);
 const selectedComplexes = ref(['tower', 'hills']);
 const complexes = [['tower', 'Թաուեր'], ['hills', 'Հիլլս']];
 const allRooms = ref(true);
@@ -52,7 +55,7 @@ const appliedFilters = computed(() => ({
 const filtered = computed(() => calculate(report.value?.deals || [], report.value?.year, appliedFilters.value));
 const kpiResetRevision = ref(0);
 const kpiData = computed(() => report.value ? kpi.calculateKpis(report.value.deals, {
-  period: selectedPeriod.value, context: periodContext.value, selection: activeSelection.value,
+  period: effectivePeriod.value.period, context: periodContext.value, selection: effectivePeriod.value.selection,
   custom: ranges.date.applied, filters: appliedFilters.value,
 }) : null);
 const categories = computed(() => report.value ? filtered.value[mode.value] : []);
@@ -68,20 +71,16 @@ function futurePeriod(value) {
   return activeSelection.value?.year === periodContext.value.year && value > periodContext.value[selectedPeriod.value];
 }
 function selectPeriodValue(value) {
-  if (selectedPeriod.value === 'month') monthBulkSelected.value = false;
   updatePeriod();
   if (!futurePeriod(value)) activeSelection.value.values = togglePeriodValue(activeSelection.value.values, value);
 }
 function changePeriodYear() {
-  if (selectedPeriod.value === 'month') monthBulkSelected.value = false;
   updatePeriod();
 }
-function toggleAllMonths() {
-  const clear = clearMonths.value;
+function setAllMonths(clear) {
   updatePeriod();
-  activeSelection.value.values = clear ? [periodContext.value.month] : [...availableMonths.value];
-  // In January All and Clear have the same selection, but still alternate actions.
-  monthBulkSelected.value = !clear;
+  activeSelection.value.values = clear ? [periodContext.value.month]
+    : Array.from({ length: availableMonths.value }, (_, index) => index + 1);
 }
 function toggleComplex(value) {
   if (!selectedComplexes.value.includes(value)) selectedComplexes.value = [...selectedComplexes.value, value];
@@ -97,7 +96,8 @@ function selectRoom(room) {
 }
 function resetFilters() {
   kpiResetRevision.value++;
-  monthBulkSelected.value = false;
+  selectedQuick.value = 'current-month';
+  monthPicker.value?.close();
   periodSelections.value = initialSelections(calendarContext());
   selectedPeriod.value = 'year'; updatePeriod();
   selectedComplexes.value = ['tower', 'hills'];
@@ -161,7 +161,7 @@ function backdrop(event) {
 }
 async function refresh(force = true) {
   if (loading.value) return;
-  closeProblems(); kpiDialog.value?.close(); report.value = null; failed.value = false; loading.value = true;
+  monthPicker.value?.close(); closeProblems(); kpiDialog.value?.close(); report.value = null; failed.value = false; loading.value = true;
   try {
     const response = await fetch(force ? '/api/report?refresh=1' : '/api/report', { cache: 'no-store' });
     if (!response.ok) throw new Error();
@@ -188,7 +188,7 @@ onMounted(() => refresh(false));
         <hr data-testid="header-divider" aria-hidden="true">
       </header>
       <div class="filter-container">
-      <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled, 'stacked-filters': stackedFilters, 'month-filter': selectedPeriod === 'month', 'quarter-filter': selectedPeriod === 'quarter' }" aria-label="Զտիչներ" @submit.prevent>
+      <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled, 'filter-panel-with-errors': hasFilterErrors, 'stacked-filters': stackedFilters, 'month-filter': selectedPeriod === 'month', 'quarter-filter': selectedPeriod === 'quarter' }" aria-label="Զտիչներ" @submit.prevent>
         <p v-if="disabled" class="filter-notice" role="status">Հաշվետվությունների թարմացման պատճառով զտիչների կարգավորումը ժամանակավորապես անհասանելի է։</p>
         <div v-show="!disabled" aria-label="Զտիչների տարածք">
           <div class="filter-heading">
@@ -205,6 +205,12 @@ onMounted(() => refresh(false));
               </select>
               <span class="select-arrow" aria-hidden="true"></span>
               </div>
+              <div v-if="selectedPeriod === 'quick'" class="period-details period-select">
+                <select v-model="selectedQuick" aria-label="Արագ ընտրություն" @change="updatePeriod">
+                  <option v-for="[value, title] in quickPeriods" :key="value" :value="value">{{ title }}</option>
+                </select>
+                <span class="select-arrow" aria-hidden="true"></span>
+              </div>
               <div v-if="activeSelection" class="period-details">
                 <div class="period-toolbar" :class="{ 'month-toolbar': selectedPeriod === 'month' }">
                   <div class="period-select">
@@ -213,13 +219,12 @@ onMounted(() => refresh(false));
                     </select>
                     <span class="select-arrow" aria-hidden="true"></span>
                   </div>
-                  <button v-if="selectedPeriod === 'month'" class="month-all" type="button" @click="toggleAllMonths">
-                    {{ clearMonths ? 'Մաքրել' : 'Բոլորը' }}
-                  </button>
+                  <MonthPicker v-if="selectedPeriod === 'month'" ref="monthPicker" :months="months"
+                    :values="activeSelection.values" :limit="availableMonths" :disabled="disabled"
+                    @select="selectPeriodValue" @all="setAllMonths(false)" @clear="setAllMonths(true)" />
                 </div>
-                <div v-if="selectedPeriod !== 'year'" class="period-buttons" :class="{ 'month-grid': selectedPeriod === 'month' }" role="group"
-                  :aria-label="selectedPeriod === 'month' ? 'Ամիսներ' : 'Եռամսյակներ'">
-                  <button v-for="(title, index) in periodValues" :key="index" type="button"
+                <div v-if="selectedPeriod === 'quarter'" class="period-buttons quarter-buttons" role="group" aria-label="Եռամսյակներ">
+                  <button v-for="(title, index) in ['I', 'II', 'III', 'IV']" :key="index" type="button"
                     :aria-pressed="activeSelection.values.includes(index + 1)" :disabled="disabled || futurePeriod(index + 1)"
                     @click="selectPeriodValue(index + 1)">{{ title }}</button>
                 </div>
@@ -271,9 +276,9 @@ onMounted(() => refresh(false));
       </div>
       <div class="kpi-container" data-testid="kpi-container">
       <div class="kpi-grid">
-        <KpiCard metric="count" title="Կնքված բնակարաններ" :data="kpiData" :period="selectedPeriod"
+        <KpiCard metric="count" title="Կնքված բնակարաններ" :data="kpiData" :period="effectivePeriod.period"
           :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
-        <KpiCard metric="amount" title="Վաճառքի ընդհանուր արժեք" :data="kpiData" :period="selectedPeriod"
+        <KpiCard metric="amount" title="Վաճառքի ընդհանուր արժեք" :data="kpiData" :period="effectivePeriod.period"
           :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
       </div>
       <div v-if="!disabled && kpiData" class="kpi-dates" data-testid="kpi-dates">

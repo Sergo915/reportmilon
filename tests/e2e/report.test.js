@@ -256,8 +256,8 @@ test.each([1440, 1920, 1024, 375, 320])('filter layout reflows without scrolling
     expectEqualPixels(panel.x + panel.width - Math.max(...boxes.map(box => box.right)), leftInset);
     boxes.forEach((box) => expectEqualPixels(box.titleCenter, box.x + box.width / 2));
     if (width === 1440 || width === 1920) {
-      boxes.slice(1, 3).forEach(box => expectEqualPixels(box.y + box.height / 2, boxes[0].y + boxes[0].height / 2));
-      expectEqualPixels(boxes[3].width, boxes[4].width);
+      boxes.slice(1, 3).forEach(box => expectEqualPixels(box.y, boxes[0].y));
+      expectEqualPixels(boxes[3].width, boxes[0].width);
       const sectionWidth = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).evaluate(el => el.clientWidth);
       expect(panel.width).toBeLessThan((sectionWidth - 24) * .7);
       const select = await filterPanel().locator('select').boundingBox();
@@ -696,7 +696,7 @@ test.each([1440, 375])('filters precede grouping with reset and without panel sc
   expect(panelBox.y + panelBox.height).toBeLessThan(groupBox.y);
   expect(await page.getByRole('button', { name: 'Վերականգնել', exact: true }).count()).toBe(1);
   const boxes = await panel.locator('fieldset').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y }; }));
-  expect(new Set(boxes.map((b) => b.y)).size).toBe(width === 375 ? 5 : 3); // custom dates center the shorter fieldsets vertically
+  expect(new Set(boxes.map((b) => b.y)).size).toBe(width === 375 ? 5 : 2); // wide headings share the first row
   for (const row of [...new Set(boxes.map(b => b.y))]) {
     const xs = boxes.filter(b => b.y === row).map(b => b.x); expect(xs).toEqual([...xs].sort((a, b) => a - b));
   }

@@ -1,8 +1,26 @@
 const periods = [
+  ['quick', 'Արագ ընտրություն'],
   ['month', 'Ամիս'], ['quarter', 'Եռամսյակ'], ['year', 'Տարի'],
-  ['last-12', 'Վերջին 12 ամիս'], ['all', 'Ամբողջ ժամանակահատված'],
   ['custom', 'Կամայական միջակայք'],
 ];
+const quickPeriods = [
+  ['current-month', 'Ընթացիկ ամիս'], ['current-year', 'Ընթացիկ տարի'],
+  ['previous-month', 'Անցյալ ամիս'], ['previous-year', 'Անցյալ տարի'],
+  ['last-12', 'Վերջին 12 ամիս'], ['all', 'Ամբողջ ժամանակահատված'],
+];
+
+// Resolve relative choices without changing the remembered manual selections.
+function quickSelection(value, context) {
+  if (value === 'last-12' || value === 'all') return { period: value };
+  if (value === 'current-year' || value === 'previous-year') {
+    return { period: 'year', selection: { year: context.year - Number(value === 'previous-year') } };
+  }
+  if (value === 'current-month' || value === 'previous-month') {
+    const date = dateAt(context.year, context.month - 1 - Number(value === 'previous-month'), 1);
+    return { period: 'month', selection: { year: Number(date.slice(0, 4)), values: [Number(date.slice(5, 7))] } };
+  }
+  throw new Error('Unknown quick period');
+}
 
 function dateAt(year, month, day) {
   const value = new Date(0);
@@ -55,4 +73,4 @@ function periodRanges(period, context, selection = defaultSelection(period, cont
   return offsets.map(([start, end]) => ({ min: dateAt(year, start, 1), max: [dateAt(year, end, 0), today].sort()[0] }))
     .filter(range => range.min <= range.max);
 }
-module.exports = { periods, dateAt, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges };
+module.exports = { periods, quickPeriods, quickSelection, dateAt, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges };
