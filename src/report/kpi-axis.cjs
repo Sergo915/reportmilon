@@ -23,7 +23,34 @@ function stepFor(value, minimumIntervals = 2, maximumIntervals = 4, integer = fa
   }
   return min;
 }
-function axisScale(series, metric, narrow = false) {
+function axisScale(series, metric, narrow = false, fitData = false) {
+  if (fitData) {
+    const values = series.filter(Boolean).flat().map(point => decimal(String(point[metric]), true)).filter(Boolean);
+    if (values.length) {
+      const lower = values.reduce((a, b) => compare(a, b) < 0 ? a : b);
+      const upper = values.reduce((a, b) => compare(a, b) > 0 ? a : b);
+      if (compare(lower, upper) < 0) {
+        const precision = Math.max(lower.scale, upper.scale);
+        const lo = lower.coefficient * 10n ** BigInt(precision - lower.scale);
+        const hi = upper.coefficient * 10n ** BigInt(precision - upper.scale);
+        const step = stepFor({ coefficient: hi - lo, scale: precision }, 2, narrow ? 2 : 6, metric === 'count');
+        const common = Math.max(precision, step.scale);
+        const stride = step.coefficient * 10n ** BigInt(common - step.scale);
+        const start = lo * 10n ** BigInt(common - precision), end = hi * 10n ** BigInt(common - precision);
+        const ticks = [];
+        for (let value = (start + stride - 1n) / stride * stride; value <= end; value += stride) {
+          const text = decimalText({ coefficient: value, scale: common });
+          ticks.push({ value: text, label: valueText(text, metric), fraction: Number((value - start) * 1000000n / (end - start)) / 1000000 });
+        }
+        if (ticks.length < 2) {
+          ticks.splice(0, ticks.length, ...[lower, upper].map((value, index) => ({
+            value: decimalText(value), label: valueText(decimalText(value), metric), fraction: index,
+          })));
+        }
+        return { lower, upper, ticks };
+      }
+    }
+  }
   const maximum = series.filter(Boolean).flat().reduce((max, point) => {
     const current = decimal(String(point[metric]), true) || zero;
     return compare(current, max) > 0 ? current : max;
@@ -44,8 +71,9 @@ function xTickIndices(length, narrow = false) {
   const count = Math.min(length, narrow ? 3 : 5);
   return Array.from({ length: count }, (_, i) => Math.round(i * (length - 1) / (count - 1)));
 }
-function dateParts(point, daily, narrow = false) {
+function dateParts(point, daily, narrow = false, shortYear = false) {
   const [year, month, day] = point.min.split('-');
+  if (shortYear) return [daily ? `${day}.${month}.${year.slice(-2)}` : `${month}.${year.slice(-2)}`];
   return daily ? [`${day}.${month}`, year] : narrow ? [month, year] : [`${month}.${year}`];
 }
 module.exports = { axisScale, xTickIndices, dateParts };

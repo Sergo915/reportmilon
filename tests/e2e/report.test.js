@@ -10,6 +10,7 @@ const columns = () => page.locator('svg [role="img"]');
 const ready = async () => { await page.locator('footer time').waitFor(); };
 async function reloadReport() { await refresh().click(); await ready(); }
 beforeEach(async () => {
+  await page.setViewportSize({ width: 1024, height: 1100 });
   await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   fixture = createFixture(); server = createServer(fixture);
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -195,6 +196,7 @@ test('wide and narrow layout keeps controls outside graph scroll and long proble
   fs.mkdirSync('test-results', { recursive: true });
   await page.screenshot({ path: 'test-results/report-wide.png', fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('.kpi-wide').waitFor({ state: 'detached' });
   const scroll = page.getByLabel('Գծապատկերի տարածք');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(await scroll.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
@@ -731,9 +733,9 @@ test.each([1440, 375])('filters precede grouping with reset and without panel sc
   await input('amount', 'max').focus();
   // The newly interactive KPI block sits between filters and chart grouping.
   for (const metric of ['count', 'amount']) {
-    await page.keyboard.press('Tab');
+    if (width < 1124 || metric === 'amount') await page.keyboard.press('Tab');
     const card = page.getByTestId(`kpi-${metric}`);
-    expect(await card.getByTestId('kpi-value').evaluate(el => el === document.activeElement)).toBe(true);
+    if (width < 1124 || metric === 'amount') expect(await card.getByTestId('kpi-value').evaluate(el => el === document.activeElement)).toBe(true);
     const seriesStops = card.locator('svg circle[tabindex="0"]');
     for (let index = 0; index < await seriesStops.count(); index++) {
       await page.keyboard.press('Tab');

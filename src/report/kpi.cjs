@@ -87,6 +87,13 @@ function compactAmount(value) {
   const digits = decimalText({ coefficient: hundredths, scale: 2 });
   return `${negative && hundredths ? '-' : ''}${fullAmount(digits).replace('.', ',')}${unit ? ` ${suffixes[unit]}` : ''} ֏`;
 }
+function fullKpiAmount(value) {
+  const number = decimal(String(value), true);
+  const divisor = 10n ** BigInt(number.scale);
+  const numerator = number.coefficient * 100n;
+  const rounded = numerator / divisor + (numerator % divisor * 2n >= divisor ? 1n : 0n);
+  return `${fullAmount(String(rounded / 100n))},${String(rounded % 100n).padStart(2, '0')} ֏`;
+}
 function valueText(value, metric) {
   return metric === 'amount' ? compactAmount(value) : fullAmount(String(value));
 }
@@ -183,4 +190,4 @@ function calculateKpis(deals, { period, context, selection, custom, filters = {}
     changes: previous ? { count: difference(current.count, previous.count), amount: difference(current.amount, previous.amount) } : null,
     rankings: Object.fromEntries(types.map(type => [type, rankings(eligible, period, context, type)])) };
 }
-module.exports = { comparisonRanges, difference, valueText, differenceText, rangeText, calculateKpis, compactAmount, detailRows };
+module.exports = { fullKpiAmount, comparisonRanges, difference, valueText, differenceText, rangeText, calculateKpis, compactAmount, detailRows };

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const { createServer } = require('../../server.js');
 const { createFixture, deal } = require('../support/crm-fixture.cjs');
 let fixture, server, url, release, errors;
-const titles = { count: 'Կնքված բնակարաններ', amount: 'Վաճառքի ընդհանուր արժեք' };
+const titles = { count: 'Կնքված բնակարանների քանակ', amount: 'Վաճառքի ընդհանուր արժեք' };
 const card = metric => page.getByRole('region', { name: titles[metric], exact: true });
 const value = metric => card(metric).getByTestId('kpi-value');
 const delta = metric => card(metric).getByTestId('kpi-change');
@@ -49,6 +49,7 @@ function history() {
     deal((y - 2024) * 12 + i + 1, { ufCrmDate: `${y}-${String(i + 1).padStart(2, '0')}-10`, opportunity: String((i + 1) * (y === 2024 ? 1 : 10)) })));
 }
 beforeEach(async () => {
+  await page.setViewportSize({ width: 1024, height: 1100 });
   await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   errors = []; page.on('pageerror', error => errors.push(error.message));
   fixture = createFixture({ time: '2026-11-15T10:00:00Z', items: [
@@ -226,7 +227,7 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
   else expect(amount.y).toBeGreaterThanOrEqual(count.y + count.height);
   const container = await page.getByTestId('kpi-container').boundingBox();
   const parent = await page.getByTestId('kpi-container').evaluate(el => el.parentElement.getBoundingClientRect().width - 2);
-  expect(container.width).toBeCloseTo((parent - 24) * .7, 0);
+  expect(container.width).toBeCloseTo(width >= 1124 ? parent - 64 : (parent - 24) * .7, 0);
   expect(Math.abs(container.x + container.width / 2 - width / 2)).toBeLessThan(2);
   expect(await page.getByTestId('kpi-axes').count()).toBe(2);
   const chartGeometry = await Promise.all(['count', 'amount'].map(metric => card(metric).evaluate(el => {
@@ -256,15 +257,17 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
       percentageRight: percentage?.right, contentRight: el.getBoundingClientRect().right - parseFloat(getComputedStyle(el).paddingRight),
       arrow: !!change?.querySelector('.kpi-percentage svg') };
   })));
-  const expectedFont = Math.max(22, Math.min(width * .03, 28));
+  const expectedFont = width >= 1124 ? 14 : Math.max(22, Math.min(width * .03, 28));
   for (const geometry of chartGeometry) {
     expect(geometry.font).toBeCloseTo(expectedFont, 1);
-    expect(Math.abs(geometry.left - geometry.right)).toBeLessThan(1);
+    if (width < 1124) expect(Math.abs(geometry.left - geometry.right)).toBeLessThan(1);
+    else expect(geometry.right).toBeCloseTo(geometry.left, 0);
     expect(geometry.xTicks.length).toBe(width < 1024 ? 3 : 5);
     for (let i = 1; i < geometry.xTicks.length; i++)
       expect(geometry.xTicks[i].x).toBeGreaterThanOrEqual(geometry.xTicks[i - 1].right - 1);
     for (const tick of geometry.yTicks) expect(tick.x).toBeGreaterThanOrEqual(geometry.box.x - 1);
-    expect(geometry.yTicks.length).toBeGreaterThanOrEqual(3);
+    // A fitted count range 1..2 has exactly two integer ticks.
+    expect(geometry.yTicks.length).toBeGreaterThanOrEqual(width >= 1124 ? 2 : 3);
     expect(geometry.gap === null || Math.abs(geometry.gap - 16) < 1).toBe(true);
     if (geometry.wrappedLeft !== null) expect(geometry.wrappedLeft).toBeCloseTo(0, 0);
     expect(geometry.percentageRight).toBeLessThanOrEqual(geometry.contentRight + 1);
@@ -276,20 +279,20 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
     expect(Math.abs(chartGeometry[0].bottom - chartGeometry[1].bottom)).toBeLessThan(1);
     expect(Math.abs(chartGeometry[0].box.width - chartGeometry[1].box.width)).toBeLessThan(1);
   }
-  expect(await page.getByTestId('kpi-dates').count()).toBe(1);
-  expect(await card('count').getByText(/^Ընտրված՝/).count()).toBe(0);
+  expect(await page.getByTestId('kpi-dates').count()).toBe(width >= 1124 ? 0 : 1);
+  expect(await card('count').getByText(/^Ընտրված՝/).count()).toBe(width >= 1124 ? 1 : 0);
   const separator = await card('amount').evaluate(el => {
     const style = getComputedStyle(el, '::before');
     return { top: style.top, bottom: style.bottom, left: style.left, right: style.right, width: style.width, height: style.height };
   });
-  if (width >= 768) expect(separator).toMatchObject({ top: '24px', bottom: '24px', width: '1px' });
+  if (width >= 768) expect(separator).toMatchObject({ top: width >= 1124 ? '16px' : '24px', bottom: width >= 1124 ? '16px' : '24px', width: '1px' });
   else expect(separator).toMatchObject({ left: '24px', right: '24px', height: '1px' });
   for (const [metric, icon] of [['count', 'building'], ['amount', 'wallet']]) {
     const image = card(metric).locator('img');
     expect(await image.getAttribute('src')).toContain(icon);
     expect(await image.evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
     const box = await image.boundingBox(), region = await card(metric).boundingBox();
-    expect(box.x + box.width).toBeCloseTo(region.x + region.width - 24, 0);
+    expect(box.x + box.width).toBeCloseTo(region.x + region.width - (width >= 1124 ? 16 : 24), 0);
   }
   const fits = async () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -298,10 +301,12 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
   await fits(); fs.mkdirSync('test-results', { recursive: true });
   await page.screenshot({ path: `test-results/kpi-comparison-${width}.png`, fullPage: true, animations: 'disabled' });
   await page.getByTestId('kpi-container').screenshot({ path: `test-results/kpi-container-${width}.png`, animations: 'disabled' });
+  if (width < 1124) {
   await openDetails('amount');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await details().screenshot({ path: `test-results/kpi-details-${width}.png`, animations: 'disabled' });
   await closeDetails();
+  }
   await selectPeriod('all'); await types('count', 'Եռամսյակներ').focus(); await page.keyboard.press('Enter');
   expect(await types('count', 'Եռամսյակներ').getAttribute('aria-pressed')).toBe('true');
   const expand = types('count', 'Ցույց տալ բոլորը'); await expand.focus(); await page.keyboard.press('Enter');
@@ -314,7 +319,7 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
   await page.keyboard.press('Space'); expect(await rows('count').count()).toBe(5);
 });
 
-const details = () => page.getByRole('dialog', { name: /^Կնքված բնակարաններ$|^Վաճառքի ընդհանուր արժեք$/ });
+const details = () => page.getByRole('dialog', { name: /^Կնքված բնակարանների քանակ$|^Վաճառքի ընդհանուր արժեք$/ });
 const detailLinks = () => details().getByRole('link', { name: 'Բացել գործարքը', exact: true });
 async function openDetails(metric) { await value(metric).click(); await details().waitFor(); }
 async function closeDetails() { await details().getByRole('button', { name: 'Փակել', exact: true }).click(); await details().waitFor({ state: 'hidden' }); }
@@ -466,3 +471,147 @@ test('empty result opens an empty detail table and loading/error block stale det
   fixture.state.failPage = undefined; fixture.state.items = [deal(77, { ufCrmDate: '2026-11-15' })]; await refresh();
   await openDetails('count'); expect(await detailLinks().first().getAttribute('href')).toContain('/77/');
 });
+
+test.each([1440, 1920])('desktop frame, legends, full tooltip and scrolling stay stable at %i', async width => {
+  await page.setViewportSize({ width, height: 1100 });
+  fixture.state.items = history();
+  fixture.state.items.push(deal(100, { ufCrmDate: '2026-11-15', opportunity: '6158173250.9' }));
+  await open();
+  const frame = page.getByTestId('kpi-container');
+  const baseline = await frame.boundingBox();
+  const filter = await page.getByRole('form', { name: 'Զտիչներ' }).boundingBox();
+  expect(baseline.height).toBe(filter.height * 2);
+  const axisTitle = await page.getByRole('heading', { name: 'Y · Ընդհանուր արժեք (֏)', exact: true }).boundingBox();
+  const section = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն', exact: true }).boundingBox();
+  const inset = axisTitle.x - section.x;
+  expect(baseline.x - section.x).toBeCloseTo(inset, 0);
+  expect(section.x + section.width - baseline.x - baseline.width).toBeCloseTo(inset, 0);
+  const shadow = await frame.evaluate(el => getComputedStyle(el).boxShadow);
+  expect(shadow).toBe(await page.getByRole('form', { name: 'Զտիչներ' }).evaluate(el => getComputedStyle(el).boxShadow));
+  expect(await page.getByTestId('kpi-dates').count()).toBe(0);
+  for (const metric of ['count', 'amount']) {
+    await value(metric).click();
+    await card(metric).getByRole('heading').click();
+    expect(await details().count()).toBe(0);
+    expect(await value(metric).evaluate(el => getComputedStyle(el).fontSize)).toBe('14px');
+    expect(await delta(metric).evaluate(el => getComputedStyle(el).fontSize)).toBe('12px');
+    const legend = card(metric).locator('.kpi-period-legend');
+    expect(await legend.innerText()).toContain('Ընտրված՝ 01.01.2026 – 15.11.2026');
+    expect(await legend.innerText()).toContain('Համեմատություն՝ 01.01.2025 – 15.11.2025');
+    expect(await legend.evaluate(el => getComputedStyle(el).fontSize)).toBe('12px');
+    const labels = await legend.locator('span').all();
+    const first = await labels[0].boundingBox(), second = await labels[1].boundingBox();
+    const heading = await card(metric).getByRole('heading').boundingBox();
+    expect(baseline.y + baseline.height - second.y - second.height).toBeCloseTo(heading.y - baseline.y, 0);
+    const arrow = await card(metric).getByTestId('kpi-percentage').locator('svg').boundingBox();
+    expect(arrow.width).toBeCloseTo(11.2, 1);
+    expect(arrow.height).toBeCloseTo(11.2, 1);
+    const valueBox = await value(metric).boundingBox(), deltaBox = await delta(metric).boundingBox();
+    expect(deltaBox.y - valueBox.y - valueBox.height).toBeCloseTo(second.y - first.y - first.height, 0);
+    if (metric === 'amount') {
+      const ticks = await card(metric).getByTestId('kpi-y-tick').allTextContents();
+      expect(ticks.every(text => !text.includes('֏'))).toBe(true);
+      expect(ticks.some(text => text.includes('մլրդ'))).toBe(true);
+    }
+    const svg = await card(metric).locator('.kpi-chart svg').boundingBox();
+    const region = await card(metric).boundingBox();
+    const icon = await card(metric).locator('img').boundingBox();
+    const iconInset = region.x + region.width - icon.x - icon.width;
+    const marks = await card(metric).locator('.kpi-chart circle').all();
+    const boxes = await Promise.all(marks.map(mark => mark.boundingBox()));
+    const visibleTop = Math.min(...boxes.map(box => box.y));
+    const visibleBottom = Math.max(...boxes.map(box => box.y + box.height));
+    const referenceGap = heading.y - region.y;
+    expect(visibleTop - deltaBox.y - deltaBox.height).toBeCloseTo(referenceGap, 0);
+    expect(first.y - visibleBottom).toBeCloseTo(referenceGap, 0);
+    const yLabels = await card(metric).getByTestId('kpi-y-tick').locator('text').all();
+    const labelBoxes = await Promise.all(yLabels.map(label => label.boundingBox()));
+    expect(Math.min(...labelBoxes.map(box => box.x)) - region.x).toBeCloseTo(iconInset, 0);
+    expect(region.x + region.width - svg.x - svg.width).toBeCloseTo(iconInset, 0);
+    expect(await card(metric).getByTestId('kpi-x-tick').locator('line').count()).toBe(0);
+    const firstMonth = await card(metric).getByTestId('kpi-x-tick').first().locator('text').boundingBox();
+    const yAxisX = await card(metric).getByTestId('kpi-axes').locator('path').evaluate(el => {
+      const start = Number(el.getAttribute('d').match(/^M([\d.]+)/)[1]);
+      return new DOMPoint(start, 0).matrixTransform(el.getScreenCTM()).x;
+    });
+    const axisEnd = await card(metric).getByTestId('kpi-axes').locator('path').evaluate(el => {
+      const end = Number(el.getAttribute('d').match(/H([\d.]+)$/)[1]);
+      return new DOMPoint(end, 0).matrixTransform(el.getScreenCTM()).x;
+    });
+    const lastMonth = await card(metric).getByTestId('kpi-x-tick').last().locator('text').boundingBox();
+    expect(lastMonth.x + lastMonth.width / 2).toBeCloseTo(axisEnd, 0);
+    expect(firstMonth.x - yAxisX).toBeCloseTo(region.x + region.width - lastMonth.x - lastMonth.width, 0);
+    expect(yAxisX - region.x).toBeCloseTo(region.x + region.width - axisEnd, 0);
+    const scrollBounds = await card(metric).getByTestId('kpi-scroll').boundingBox();
+    for (const label of await card(metric).getByTestId('kpi-x-tick').locator('text').all()) {
+      const bounds = await label.boundingBox();
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(scrollBounds.y + scrollBounds.height);
+    }
+    const axisGeometry = await card(metric).locator('.kpi-chart svg').evaluate(el => {
+      const box = el.getBoundingClientRect();
+      const path = el.querySelector('[data-testid="kpi-axes"] path').getAttribute('d').match(/M([\d.]+) ([\d.]+)V([\d.]+)/);
+      const yLabels = [...el.querySelectorAll('[data-testid="kpi-y-tick"] text')].map(text => text.getBoundingClientRect());
+      const xLabels = [...el.querySelectorAll('[data-testid="kpi-x-tick"] text')].map(text => ({ top: text.getBoundingClientRect().top, text: text.textContent }));
+      return { yGaps: yLabels.map(label => box.x + Number(path[1]) - label.right), yGap: box.x + Number(path[1]) - Math.max(...yLabels.map(label => label.right)),
+        xGaps: xLabels.map(label => label.top - box.y - Number(path[3])), labels: xLabels.map(label => label.text) };
+    });
+    expect(axisGeometry.labels.every(label => /^\d{2}\.\d{2}$/.test(label))).toBe(true);
+    for (const gap of axisGeometry.yGaps) expect(gap).toBeCloseTo(7, 0);
+    for (const gap of axisGeometry.xGaps) expect(gap).toBeCloseTo(axisGeometry.yGap, 0);
+
+    expect((await legend.boundingBox()).y).toBeGreaterThanOrEqual(svg.y + svg.height);
+  }
+  await value('amount').focus();
+  await card('amount').getByRole('tooltip').waitFor();
+  expect(await card('amount').getByRole('tooltip').innerText()).toBe('6 158 173 910,90 ֏');
+  await value('amount').press('Enter'); expect(await details().count()).toBe(0);
+  await frame.screenshot({ path: `test-results/kpi-desktop-${width}.png` });
+  await selectPeriod('all');
+  expect(await card('count').locator('.kpi-period-legend span').count()).toBe(1);
+  await types('count', 'Ցույց տալ բոլորը').click();
+  await rows('count').last().scrollIntoViewIfNeeded();
+  expect(await card('count').getByTestId('kpi-scroll').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+  const pinned = await card('count').locator('.kpi-period-legend').boundingBox();
+  expect(baseline.y + baseline.height - pinned.y - pinned.height).toBeCloseTo(1, 0);
+  expect(await frame.boundingBox()).toEqual(expect.objectContaining({ width: baseline.width, height: baseline.height }));
+  await frame.screenshot({ path: `test-results/kpi-desktop-ranking-${width}.png` });
+  await selectPeriod('custom');
+  expect(await frame.boundingBox()).toEqual(expect.objectContaining({ width: baseline.width, height: baseline.height }));
+});
+
+test('desktop frame survives loading, failure, recovery and empty selection', async () => {
+  await page.setViewportSize({ width: 1440, height: 1100 }); await open();
+  const frame = page.getByTestId('kpi-container'); const base = await frame.boundingBox();
+  fixture.state.gate = new Promise(resolve => { release = resolve; }); fixture.state.failPage = 0;
+  await button('Թարմացնել հաշվետվությունը').click();
+  await card('count').getByText('Տվյալները բեռնվում են…').waitFor();
+  expect(await frame.boundingBox()).toEqual(expect.objectContaining({ width: base.width, height: base.height }));
+  expect(await page.locator('.kpi-period-legend').count()).toBe(0);
+  release(); fixture.state.gate = null;
+  await card('count').getByText('Տվյալներն անհասանելի են։').waitFor();
+  expect(await frame.boundingBox()).toEqual(expect.objectContaining({ width: base.width, height: base.height }));
+  fixture.state.failPage = undefined; fixture.state.items = []; await refresh();
+  await expectValue('count', '0');
+  expect(await frame.boundingBox()).toEqual(expect.objectContaining({ width: base.width, height: base.height }));
+  expect(await page.locator('.kpi-period-legend').count()).toBe(2);
+});
+
+ test('desktop data bounds preserve title-sized gaps when every daily amount is nonzero', async () => {
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  fixture.state.items = [100, 200, 300, 125, 175, 250].map((amount, i) => deal(i + 1, {
+    ufCrmDate: `2026-11-${[13, 14, 15, 10, 11, 12][i]}`, opportunity: String(amount),
+  }));
+  await open(); await selectPeriod('custom');
+  await input('date', 'min').fill('2026-11-13'); await input('date', 'max').fill('2026-11-15');
+  await expectValue('amount', '600 ֏');
+  const region = await card('amount').boundingBox(), heading = await card('amount').getByRole('heading').boundingBox();
+  const change = await delta('amount').boundingBox();
+  const selected = await card('amount').locator('.kpi-period-legend span').first().boundingBox();
+  const boxes = await card('amount').locator('.kpi-chart circle').evaluateAll(nodes => nodes.map(el => {
+    const box = el.getBoundingClientRect(), stroke = parseFloat(getComputedStyle(el).strokeWidth) / 2;
+    return { top: box.top - stroke, bottom: box.bottom + stroke };
+  }));
+  const gap = heading.y - region.y;
+  expect(Math.min(...boxes.map(box => box.top)) - change.y - change.height).toBeCloseTo(gap, 0);
+  expect(selected.y - Math.max(...boxes.map(box => box.bottom))).toBeCloseTo(gap, 0);
+ });

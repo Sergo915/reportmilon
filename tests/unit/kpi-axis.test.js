@@ -27,6 +27,8 @@ test('X ticks use the current series length and preserve its first and last posi
   expect(xTickIndices(28)).toEqual([0, 7, 14, 20, 27]);
   expect(xTickIndices(28, true)).toEqual([0, 14, 27]);
   expect(dateParts(point(1), true)).toEqual(['01.02', '2025']);
+  expect(dateParts(point(1), true, false, true)).toEqual(['01.02.25']);
+  expect(dateParts(point(1), false, false, true)).toEqual(['02.25']);
   expect(dateParts({ min: '2025-02-01', max: '2025-02-28' }, false)).toEqual(['02.2025']);
   expect(dateParts({ min: '2025-02-01', max: '2025-02-28' }, false, true)).toEqual(['02', '2025']);
 });
@@ -40,3 +42,13 @@ test('narrow scale keeps 3 to 5 unique labels across decimal magnitudes', () => 
     expect(new Set(scale.ticks.map(tick => tick.label)).size).toBe(scale.ticks.length);
   }
 });
+
+ test('fitted desktop scale uses actual nonzero extrema from both lines', () => {
+  const scale = axisScale([[point(0, '1500000000'), point(0, '6158173250.9')], [point(0, '1200000000')]], 'amount', false, true);
+  expect(compare(scale.lower, decimal('1200000000'))).toBe(0);
+  expect(compare(scale.upper, decimal('6158173250.9'))).toBe(0);
+  expect(scale.ticks.map(tick => tick.value)).toEqual(['2000000000', '3000000000', '4000000000', '5000000000', '6000000000']);
+  expect(scale.ticks.every(tick => tick.fraction >= 0 && tick.fraction <= 1)).toBe(true);
+  const flat = axisScale([[point(7), point(7)]], 'count', false, true);
+  expect(compare(flat.upper, decimal('7'))).toBeGreaterThanOrEqual(0);
+ });

@@ -18,6 +18,15 @@ const { calculate, roomOptions, reconcileRooms, toggleRoom, validateRange } = fi
 const mode = ref('rooms'), report = ref(null), loading = ref(false), failed = ref(false);
 const updatedAt = ref(null), dialog = ref(null), problemButton = ref(null);
 const kpiDialog = ref(null);
+const filterContainer = ref(null), wideKpi = ref(false);
+let kpiObserver;
+onMounted(() => {
+  kpiObserver = new ResizeObserver(() => {
+    wideKpi.value = filterContainer.value.clientWidth >= 1100;
+  });
+  kpiObserver.observe(filterContainer.value);
+});
+onBeforeUnmount(() => kpiObserver?.disconnect());
 const months = ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր'];
 const fields = { rooms: 'Սենյակների քանակ', date: 'Կնքման ամսաթիվ', amount: 'Ընդհանուր արժեք', area: 'Մակերես (մ²)', currency: 'Արժույթ' };
 const filterFields = { ...fields, amount: 'Բնակարանի արժեք (֏)', date: 'Կնքման ժամանակահատված' };
@@ -187,7 +196,7 @@ onMounted(() => refresh(false));
         <h1>Կնքված բնակարանների հաշվետվություն</h1>
         <hr data-testid="header-divider" aria-hidden="true">
       </header>
-      <div class="filter-container">
+      <div ref="filterContainer" class="filter-container">
       <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled, 'filter-panel-with-errors': hasFilterErrors, 'stacked-filters': stackedFilters, 'month-filter': selectedPeriod === 'month', 'quarter-filter': selectedPeriod === 'quarter' }" aria-label="Զտիչներ" @submit.prevent>
         <p v-if="disabled" class="filter-notice" role="status">Հաշվետվությունների թարմացման պատճառով զտիչների կարգավորումը ժամանակավորապես անհասանելի է։</p>
         <div v-show="!disabled" aria-label="Զտիչների տարածք">
@@ -274,14 +283,14 @@ onMounted(() => refresh(false));
         </div>
       </form>
       </div>
-      <div class="kpi-container" data-testid="kpi-container">
+      <div class="kpi-container" :class="{ 'kpi-wide': wideKpi }" data-testid="kpi-container">
       <div class="kpi-grid">
-        <KpiCard metric="count" title="Կնքված բնակարաններ" :data="kpiData" :period="effectivePeriod.period"
+        <KpiCard :wide="wideKpi" metric="count" title="Կնքված բնակարանների քանակ" :data="kpiData" :period="effectivePeriod.period"
           :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
-        <KpiCard metric="amount" title="Վաճառքի ընդհանուր արժեք" :data="kpiData" :period="effectivePeriod.period"
+        <KpiCard :wide="wideKpi" metric="amount" title="Վաճառքի ընդհանուր արժեք" :data="kpiData" :period="effectivePeriod.period"
           :loading="loading" :failed="failed" :reset-revision="kpiResetRevision" @open="(title, element) => kpiDialog.open(title, element)" />
       </div>
-      <div v-if="!disabled && kpiData" class="kpi-dates" data-testid="kpi-dates">
+      <div v-if="!wideKpi && !disabled && kpiData" class="kpi-dates" data-testid="kpi-dates">
         <p>Ընտրված՝ {{ kpi.rangeText(kpiData.ranges.current) || 'Տվյալներ չկան' }}</p>
         <p v-if="kpiData.ranges.previous">Համեմատություն՝ {{ kpi.rangeText(kpiData.ranges.previous) }}</p>
       </div>

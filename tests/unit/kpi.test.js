@@ -197,3 +197,11 @@ test.each([
   expect(calculateKpis(deals, { ...resolved, context: calendar, filters }))
     .toEqual(calculateKpis(deals, { period, selection, context: calendar, filters }));
 });
+
+ test.each([
+ ['6158173250.9', '6 158 173 250,90 ֏'], ['0', '0,00 ֏'], ['12', '12,00 ֏'],
+ ['1.004', '1,00 ֏'], ['1.005', '1,01 ֏'], ['999.999', '1 000,00 ֏'],
+ ['9007199254740993.125', '9 007 199 254 740 993,13 ֏'],
+ ])('full KPI amount %s preserves exact rounding', (input, output) => {
+ expect(require('../../src/report/kpi.cjs').fullKpiAmount(input)).toBe(output);
+ });

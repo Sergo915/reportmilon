@@ -205,5 +205,39 @@ dialog::backdrop { background: rgb(15 23 42 / 45%); }
 .kpi-axis { fill: #64748b; font-size: 10px; }
 @media (max-width: 767px) { .kpi-axis { font-size: 9px; } }
 @media (max-width: 500px) { .kpi-percentage { font-size: 11px; } }
-@media (min-width: 768px) { .kpi-card > [aria-live] { min-height: 138px; } }
-@media (min-width: 1024px) { .kpi-card > [aria-live] { min-height: 94px; } }
+@media (min-width: 768px) { .kpi-card .kpi-scroll > [aria-live] { min-height: 138px; } }
+@media (min-width: 1024px) { .kpi-card .kpi-scroll > [aria-live] { min-height: 94px; } }
+
+/* Desktop KPI: independent scroll areas keep the outer frame stable. */
+.kpi-wide { width: calc(100% - 64px); height: 516px; box-shadow: 0 4px 16px #18253d0a; --kpi-row-gap: 4px; }
+.kpi-wide .kpi-grid { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.kpi-scroll { display: contents; }
+.kpi-wide .kpi-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.kpi-wide .kpi-scroll { display: block; flex: 1; min-height: 0; padding: 16px 16px 0; overflow-y: auto; }
+.kpi-wide .kpi-card + .kpi-card::before { top: 16px; bottom: 16px; }
+.kpi-wide .kpi-heading { align-items: center; min-height: 40px; margin-bottom: 16px; }
+.kpi-wide .kpi-value { font-size: 14px; }
+.kpi-wide .kpi-value-wrap { display: flex; }
+.kpi-wide .kpi-change { font-size: 12px; margin-top: var(--kpi-row-gap); }
+.kpi-wide .kpi-card .kpi-scroll > [aria-live] { min-height: 65px; }
+.kpi-wide .kpi-chart, .kpi-wide .kpi-types, .kpi-wide .kpi-ranking, .kpi-wide .kpi-expand { margin-top: 16px; }
+.kpi-wide .kpi-period-legend { display: grid; gap: var(--kpi-row-gap); margin: 0; padding: 16px 16px 25.5px; flex-shrink: 0; font-size: 12px; }
+.kpi-wide .kpi-legend i { flex-shrink: 0; }
+.kpi-wide .kpi-chart-tooltip { position: absolute; z-index: 1; background: #f8fafc; }
+.kpi-wide .kpi-chart-tooltip:empty { display: none; }
+.kpi-wide .kpi-touched .kpi-value-tooltip { display: block; }
+.kpi-wide .kpi-value-tooltip { bottom: auto; top: 100%; max-width: none; white-space: nowrap; }
+.kpi-wide .kpi-value:focus + .kpi-value-tooltip { display: block; }
+
+@media (min-width: 768px) and (max-width: 1023px) { .kpi-heading { min-height: 63px; } }
+
+/* Reserve equal title-sized gaps above and below the visible data lines and points. */
+.kpi-wide .kpi-balanced .kpi-scroll { display: flex; flex-direction: column; }
+.kpi-wide .kpi-balanced .kpi-heading { flex-shrink: 0; }
+.kpi-wide .kpi-balanced .kpi-scroll > [aria-live] { min-height: 0; flex-shrink: 0; }
+.kpi-wide .kpi-balanced .kpi-chart { position: relative; flex: 1; min-height: 190px; margin-top: 0; }
+.kpi-wide .kpi-balanced .kpi-chart svg { position: absolute; top: 25.5px; left: 0; }
+.kpi-wide .kpi-balanced .kpi-chart-tooltip { bottom: 0; }
+/* Keep X labels in the scroll viewport while preserving the legend position. */
+.kpi-wide .kpi-balanced .kpi-scroll { padding-bottom: 16px; }
+.kpi-wide .kpi-balanced .kpi-period-legend { padding-top: 0; }

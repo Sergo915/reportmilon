@@ -11,6 +11,7 @@ const count = async n => {
   expect(await page.getByTestId('kpi-count').getByTestId('kpi-value').innerText()).toBe(String(n));
 };
 beforeEach(async () => {
+  await page.setViewportSize({ width: 1024, height: 1100 });
   await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   const dates = ['2023-07-10', '2024-12-31', '2025-01-01', '2025-11-30', '2025-12-01', '2025-12-31',
     '2026-01-01', '2026-09-30', '2026-10-01', '2026-10-31', '2026-11-01', '2026-11-15', '2026-11-16'];
@@ -38,12 +39,15 @@ test.each([375, 1440])('all quick choices apply inclusive dates, filters, KPIs a
     ['last-12', 8, '01.12.2025 – 15.11.2026'], ['all', 12, '10.07.2023 – 15.11.2026'],
   ]) {
     await quick().selectOption(value); await count(n);
-    expect(await page.getByTestId('kpi-dates').getByText(`Ընտրված՝ ${label}`, { exact: true }).isVisible()).toBe(true);
+    expect(await (width >= 1124 ? page.getByTestId('kpi-count').locator('.kpi-period-legend') : page.getByTestId('kpi-dates')).getByText(`Ընտրված՝ ${label}`, { exact: true }).isVisible()).toBe(true);
     expect(await page.getByTestId('kpi-amount').getByTestId('kpi-value').innerText()).toBe(`${n * 10} ֏`);
     await page.getByTestId('kpi-count').getByTestId('kpi-value').click();
-    const dialog = page.getByRole('dialog', { name: 'Կնքված բնակարաններ', exact: true });
-    expect(await dialog.locator('tbody tr').count()).toBe(n);
-    await dialog.getByRole('button', { name: 'Փակել', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Կնքված բնակարանների քանակ', exact: true });
+    if (width >= 1124) expect(await dialog.count()).toBe(0);
+    else {
+      expect(await dialog.locator('tbody tr').count()).toBe(n);
+      await dialog.getByRole('button', { name: 'Փակել', exact: true }).click();
+    }
     expect(await page.getByTestId('kpi-count').locator('.kpi-ranking').count()).toBe(['last-12', 'all'].includes(value) ? 1 : 0);
   }
   expect(requests).toBe(1); expect(fixture.state.reads).toBe(1);

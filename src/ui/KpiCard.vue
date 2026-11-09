@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { ArrowUp, ArrowDown } from '@lucide/vue';
 import kpi from '../report/kpi.cjs';
 import KpiChart from './KpiChart.vue';
@@ -7,12 +7,15 @@ import buildingIcon from '../../images/building.png';
 import walletIcon from '../../images/wallet.png';
 const { valueText } = kpi;
 const props = defineProps({
-  metric: String, title: String, data: Object, period: String,
+  wide: Boolean, metric: String, title: String, data: Object, period: String,
   loading: Boolean, failed: Boolean, resetRevision: Number,
 });
 const emit = defineEmits(['open']);
-const openButton = ref(null);
-function open() { if (!unavailable.value) { openButton.value?.focus(); emit('open', props.title, openButton.value); } }
+const openButton = ref(null), touched = ref(false), valueWrap = ref(null);
+function outside(event) { if (!valueWrap.value?.contains(event.target)) touched.value = false; }
+onMounted(() => document.addEventListener('pointerdown', outside));
+onUnmounted(() => document.removeEventListener('pointerdown', outside));
+function open() { if (!props.wide && !unavailable.value) { openButton.value?.focus(); emit('open', props.title, openButton.value); } }
 function cardClick(event) {
   if (!event.target.closest('button, a, .kpi-chart')) open();
 }
@@ -28,7 +31,8 @@ function selectType(value) { type.value = value; expanded.value = false; }
 </script>
 
 <template>
-  <section class="kpi-card" :class="{ 'kpi-clickable': !unavailable }" :aria-labelledby="`kpi-${metric}-title`" :aria-busy="loading" :data-testid="`kpi-${metric}`" @click="cardClick">
+  <section :tabindex="wide ? -1 : undefined" class="kpi-card" :class="{ 'kpi-clickable': !wide && !unavailable, 'kpi-balanced': wide && !data?.ranking }" :aria-labelledby="`kpi-${metric}-title`" :aria-busy="loading" :data-testid="`kpi-${metric}`" @click="cardClick">
+    <div class="kpi-scroll" data-testid="kpi-scroll">
     <div class="kpi-heading"><h2 :id="`kpi-${metric}-title`">{{ title }}</h2>
       <img :src="metric === 'count' ? buildingIcon : walletIcon" alt="" width="40" height="40" />
     </div>
@@ -36,21 +40,22 @@ function selectType(value) { type.value = value; expanded.value = false; }
       <p v-if="loading || (!data && !failed)" class="kpi-notice">Տվյալները բեռնվում են…</p>
       <p v-else-if="failed" class="kpi-notice">Տվյալներն անհասանելի են։</p>
       <template v-else>
-        <div class="kpi-value-wrap">
-          <button ref="openButton" type="button" class="kpi-value" data-testid="kpi-value"
+        <div ref="valueWrap" class="kpi-value-wrap" :class="{ 'kpi-touched': touched }">
+          <span v-if="wide" class="kpi-value" data-testid="kpi-value" :tabindex="metric === 'amount' ? 0 : undefined" :aria-describedby="metric === 'amount' ? 'kpi-amount-tooltip' : undefined" @click.stop="touched = true" @blur="touched = false">{{ valueText(data.current[metric], metric) }}</span>
+          <button v-else ref="openButton" type="button" class="kpi-value" data-testid="kpi-value"
             :aria-label="`${title}՝ բացել գործարքները`" :aria-describedby="metric === 'amount' ? 'kpi-amount-tooltip' : undefined"
             @click.stop="open">{{ valueText(data.current[metric], metric) }}</button>
-          <span v-if="metric === 'amount'" id="kpi-amount-tooltip" class="kpi-value-tooltip" role="tooltip">{{ valueText(data.current[metric], metric) }}</span>
+          <span v-if="metric === 'amount'" id="kpi-amount-tooltip" class="kpi-value-tooltip" role="tooltip">{{ wide ? kpi.fullKpiAmount(data.current[metric]) : valueText(data.current[metric], metric) }}</span>
         </div>
         <p v-if="change" class="kpi-change" data-testid="kpi-change">
           <span>{{ change.direction === 'up' ? '+' : '' }}{{ valueText(change.delta, metric) }}</span>
-          <span :class="`kpi-${change.direction}`" class="kpi-percentage" data-testid="kpi-percentage"><component :is="change.direction === 'up' ? ArrowUp : ArrowDown" v-if="change.direction !== 'flat'" :size="16" aria-hidden="true" />{{ change.percentage ?? '—' }}</span>
+          <span :class="`kpi-${change.direction}`" class="kpi-percentage" data-testid="kpi-percentage"><component :is="change.direction === 'up' ? ArrowUp : ArrowDown" v-if="change.direction !== 'flat'" :size="wide ? 11.2 : 16" aria-hidden="true" />{{ change.percentage ?? '—' }}</span>
         </p>
         <p v-else-if="period === 'custom'" class="kpi-notice">Համեմատության համար նշեք երկու ամսաթվերը։</p>
       </template>
     </div>
     <template v-if="!unavailable">
-      <KpiChart :series="data.series" :metric="metric" :title="title" :period="period" :ranges="data.ranges" />
+      <KpiChart :balanced="wide && !data.ranking" :wide="wide" :series="data.series" :metric="metric" :title="title" :period="period" :ranges="data.ranges" />
       <template v-if="data.ranking">
         <div v-if="period === 'all'" class="kpi-types" role="group" :aria-label="`${title}՝ վարկանիշի ժամանակահատված`">
           <button v-for="[value, label] in types" :key="value" type="button" :aria-pressed="type === value" @click="selectType(value)">{{ label }}</button>
@@ -67,5 +72,10 @@ function selectType(value) { type.value = value; expanded.value = false; }
           @click="expanded = !expanded">{{ expanded ? 'Թաքցնել' : 'Ցույց տալ բոլորը' }}</button>
       </template>
     </template>
+    </div>
+    <div v-if="wide && !unavailable" class="kpi-legend kpi-period-legend">
+      <span><i class="kpi-line-0"></i>Ընտրված՝ {{ kpi.rangeText(data.ranges.current) || 'Տվյալներ չկան' }}</span>
+      <span v-if="data.ranges.previous"><i class="kpi-line-1"></i>Համեմատություն՝ {{ kpi.rangeText(data.ranges.previous) }}</span>
+    </div>
   </section>
 </template>
