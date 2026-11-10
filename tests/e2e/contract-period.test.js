@@ -18,8 +18,8 @@ const selectPeriod = async value => {
 const selectYear = async value => { await year().selectOption(value); await openMonths(); };
 
 const button = name => page.getByRole('button', { name, exact: true });
-const ready = () => page.locator('footer time').waitFor();
-const count = async n => expect(await page.getByTestId('total-count').innerText()).toBe(`Գործարքների քանակ՝ ${n}`);
+const ready = () => page.getByTestId('statistics-count').waitFor();
+const count = async n => expect(await page.getByTestId('statistics-count').innerText()).toBe(String(n));
 const refresh = async () => { await button('Թարմացնել հաշվետվությունը').click(); await ready(); };
 const selected = async (name, value = true) => { await openMonths(); expect(await button(name).getAttribute('aria-pressed')).toBe(String(value)); };
 beforeEach(async () => {
@@ -43,7 +43,7 @@ test('nonadjacent months, last selection and year boundaries filter immediately 
   await selectPeriod('month'); await selected('Մայիս');
   await selectYear('2025');
   await button('Հունվար').click(); await button('Մարտ').click(); await button('Մայիս').click();
-  await count(2); expect(await page.getByRole('img', { name: '2՝ 40 AMD, 2 գործարք', exact: true }).count()).toBe(1);
+  await count(2); expect(await page.getByTestId('statistics-amount').innerText()).toBe('40 ֏');
   await button('Հունվար').click(); await count(1); await button('Մարտ').click(); await count(1); await selected('Մարտ');
   await button('Հունվար').click();
   await button('Թաուեր').click(); await count(0);
@@ -53,9 +53,7 @@ test('nonadjacent months, last selection and year boundaries filter immediately 
   await page.getByLabel('Մակերես (մ²)՝ Սկսած', { exact: true }).fill(''); await count(2);
   await page.getByLabel('Բնակարանի արժեք (֏)՝ Մինչև', { exact: true }).fill('20'); await count(1);
   await page.getByLabel('Բնակարանի արժեք (֏)՝ Մինչև', { exact: true }).fill('');
-  await button('Կնքման ամսաթիվ').click(); await count(0); expect(await page.locator('svg .chart-column[role="img"]').count()).toBe(12);
-  await button('Սենյակների քանակ').click(); await count(2);
-  expect(await page.getByRole('button', { name: /^Խնդրահարույց գործարքներ/ }).innerText()).toMatch(/1/);
+  await count(2);
   expect(requests).toBe(1); expect(fixture.state.reads).toBe(1);
 });
 
@@ -98,8 +96,8 @@ test('each mode remembers choices, refresh preserves them, reset and reload rest
   await selectPeriod('month'); expect(await year().inputValue()).toBe('2025'); await selected('Հունվար'); await selected('Մարտ');
   await selectPeriod('quarter'); expect(await year().inputValue()).toBe('2024'); await selected('I'); await selected('III');
   await selectPeriod('year'); expect(await year().inputValue()).toBe('2023');
-  await button('Կնքման ամսաթիվ').click(); await button('Վերականգնել').click();
-  expect(await period().inputValue()).toBe('year'); expect(await year().inputValue()).toBe('2026'); await selected('Կնքման ամսաթիվ');
+  await button('Վերականգնել').click();
+  expect(await period().inputValue()).toBe('year'); expect(await year().inputValue()).toBe('2026');
   await selectPeriod('month'); await selected('Մայիս'); await selected('Հունվար', false); expect(await year().inputValue()).toBe('2026');
   await selectPeriod('quarter'); await selected('II'); await selected('I', false);
   await page.reload(); await ready(); expect(await period().inputValue()).toBe('year'); expect(await year().inputValue()).toBe('2026');
@@ -131,7 +129,7 @@ test.each(['empty', 'problem', 'future'])('%s data keeps a current year and empt
   fixture.state.items = kind === 'empty' ? [] : [deal(1, { ufCrmDate: kind === 'problem' ? '2020-01-01' : '2026-05-16', ...(kind === 'problem' ? { ufCrmArea: null } : {}) })];
   await page.goto(url); await ready();
   for (const value of ['year', 'month', 'quarter', 'last-12', 'all']) {
-    await selectPeriod(value); await count(0); expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
+    await selectPeriod(value); await count(0); expect(await page.locator('.statistics-body').getByRole('status').filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
     if (['year', 'month', 'quarter'].includes(value)) expect(await year().locator('option').allTextContents()).toEqual(['2026']);
   }
   fixture.state.items = [deal(1, { ufCrmDate: '2022-07-10' })]; await refresh(); await count(1);
@@ -143,10 +141,10 @@ test('loading and failed refresh hide controls, recovery keeps month selection',
   await page.goto(url); await ready(); await selectPeriod('month'); await selectYear('2025');
   await button('Հունվար').click(); await button('Մայիս').click(); await count(1);
   fixture.state.gate = new Promise(resolve => { release = resolve; }); fixture.state.failPage = 0;
-  await button('Թարմացնել հաշվետվությունը').click(); await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
+  await button('Թարմացնել հաշվետվությունը').click(); await page.locator('.statistics-status').filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
   expect(await year().count()).toBe(0); expect(await button('Հունվար').count()).toBe(0);
   release(); fixture.state.gate = null;
-  await page.getByText('Չհաջողվեց բեռնել տվյալները։ Փորձեք կրկին։').waitFor();
+  await page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' }).waitFor();
   expect(await page.locator('svg').count()).toBe(0); expect(await year().count()).toBe(0);
   fixture.state.failPage = undefined; await refresh(); await count(1); expect(await year().inputValue()).toBe('2025'); await selected('Հունվար');
 });

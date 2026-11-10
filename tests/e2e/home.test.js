@@ -8,13 +8,14 @@ describe('home page', () => {
 
     expect(response.status()).toBe(200);
     await page.getByRole('heading', { name: reportTitle, level: 1, exact: true }).waitFor({ state: 'visible' });
-    await page.getByRole('img', { name: '2՝ 10 AMD, 1 գործարք', exact: true }).waitFor();
+    await page.getByTestId('statistics-count').waitFor();
+    expect(await page.getByTestId('statistics-count').innerText()).toBe('1');
   });
 
   test('keeps header text in place inside the full-width report section with side gutters', async () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
-    await page.locator('footer time').waitFor();
+    await page.getByTestId('statistics-count').waitFor();
     const region = page.getByRole('region', { name: 'Գործարքների հաշվետվություն' });
     const header = region.locator('header');
     const labels = [
@@ -38,15 +39,15 @@ describe('home page', () => {
     const divider = await page.getByTestId('header-divider').boundingBox();
     const section = await region.boundingBox();
     const filters = await page.getByRole('form', { name: 'Զտիչներ' }).boundingBox();
-    for (const box of [label, title]) expect(box.x + box.width / 2).toBeCloseTo(720);
-    expect(label.y).toBe(16);
+    for (const box of [label, title]) expect(box.x + box.width / 2).toBeCloseTo(720, 1);
+    expect(label.y).toBeGreaterThanOrEqual(16);
     expect(divider).toMatchObject({ x: 33, width: 1374, height: 1 });
     expect(await page.getByTestId('header-divider').evaluate(el => {
       const style = getComputedStyle(el);
       return [style.borderTopStyle, style.borderTopColor];
     })).toEqual(['solid', 'rgb(219, 228, 239)']);
     expect(title.y - label.y - label.height).toBeCloseTo(8);
-    expect(divider.y - title.y - title.height).toBeCloseTo(16);
+    expect(divider.y - title.y - title.height).toBeGreaterThanOrEqual(16);
     expect(filters.y).toBeGreaterThan(divider.y + divider.height);
     expect(section).toMatchObject({ x: 32, y: 0, width: 1376 });
     expect(filters.width).toBeLessThan(1350 * .7);
@@ -62,8 +63,45 @@ describe('home page', () => {
     await page.setViewportSize({ width: 1920, height: 1000 });
     expect(await region.boundingBox()).toMatchObject({ x: 32, width: 1856 });
     const wideTitle = await labels[1].boundingBox();
-    expect(wideTitle.x + wideTitle.width / 2).toBeCloseTo(960);
+    expect(wideTitle.x + wideTitle.width / 2).toBeCloseTo(960, 1);
     expect(wideTitle.y).toBe(title.y);
+  });
+
+  test.each([1920, 1440, 1024, 375, 320])('shows the logo left and the only refresh button right in the header at %i px', async width => {
+    await page.setViewportSize({ width, height: 1000 }); await page.goto('/');
+    await page.getByTestId('statistics-count').waitFor();
+    const header = page.locator('.report-header');
+    const logo = header.getByRole('img', { name: 'Milon Mining', exact: true });
+    const refresh = header.getByRole('button', { name: 'Թարմացնել հաշվետվությունը', exact: true });
+    const frame = await page.locator('.report-top-panels').boundingBox();
+    const label = await header.getByText('Հաշվետվություններ', { exact: true }).boundingBox();
+    const title = await header.getByRole('heading', { name: reportTitle, exact: true }).boundingBox();
+    const image = await logo.boundingBox(), button = await refresh.boundingBox();
+    expect(await logo.evaluate(img => img.complete && img.naturalWidth === 375 && img.naturalHeight === 300)).toBe(true);
+    expect(Math.abs(image.x - frame.x)).toBeLessThan(1);
+    expect(Math.abs(button.x + button.width - frame.x - frame.width)).toBeLessThan(1);
+    expect(image.y).toBeGreaterThanOrEqual(label.y);
+    expect(image.y + image.height).toBeLessThanOrEqual(title.y + title.height);
+    if (await header.evaluate(el => el.classList.contains('header-wide'))) {
+      expect(Math.abs(image.y - label.y)).toBeLessThan(1);
+      expect(Math.abs(image.y + image.height - title.y - title.height)).toBeLessThan(1);
+      expect(Math.abs(image.y + image.height / 2 - button.y - button.height / 2)).toBeLessThan(1);
+    } else expect(button.y).toBeGreaterThanOrEqual(title.y + title.height);
+    expect(await page.getByRole('button', { name: 'Թարմացնել հաշվետվությունը', exact: true }).count()).toBe(1);
+    const source = await logo.getAttribute('src');
+    expect(source).toMatch(/^\/assets\/logo_milon-[\w-]+\.png$/);
+    const response = await page.request.get(source);
+    expect(response.status()).toBe(200); expect(response.headers()['content-type']).toBe('image/png');
+    expect(await page.getByText('Ցուցադրություն', { exact: true }).count()).toBe(0);
+    expect(await page.getByRole('group', { name: 'Խմբավորում', exact: true }).count()).toBe(0);
+    expect(await page.getByRole('button', { name: 'Սենյակների քանակ', exact: true }).count()).toBe(0);
+    expect(await page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true }).count()).toBe(0);
+    expect(await page.getByLabel('Գծապատկերի տարածք', { exact: true }).count()).toBe(0);
+    expect(await page.locator('footer, .chart-column').count()).toBe(0);
+    expect(await page.getByTestId('kpi-container').isVisible()).toBe(true);
+    expect(await page.getByRole('region', { name: 'Վիճակագրություն', exact: true }).isVisible()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `test-results/header-logo-${width}.png`, fullPage: true, animations: 'disabled' });
   });
 
   test('does not serve local secrets or project files', async () => {

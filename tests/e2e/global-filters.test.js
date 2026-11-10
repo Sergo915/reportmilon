@@ -22,8 +22,8 @@ const room = n => page.getByRole('button', { name: `Սենյակների քան�
 const tower = () => page.getByRole('button', { name: 'Թաուեր', exact: true });
 const hills = () => page.getByRole('button', { name: 'Հիլլս', exact: true });
 const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի արժեք (֏)', area: 'Մակերես (մ²)', date: 'Կնքման ժամանակահատված' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
-const count = async value => expect(await page.getByTestId('total-count').innerText()).toBe(`Գործարքների քանակ՝ ${value}`);
-const ready = async () => page.locator('footer time').waitFor();
+const count = async value => expect(await page.getByTestId('statistics-count').innerText()).toBe(String(value));
+const ready = async () => page.getByTestId('statistics-count').waitFor();
 beforeEach(async () => {
   await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
   fixture = createFixture({ items: [
@@ -61,10 +61,8 @@ test('global defaults, all five intersecting filters, complex last selection and
   await input('amount', 'max').fill('11999999'); await count(0);
   expect(await input('amount', 'max').inputValue()).toBe('11 999 999');
   await input('amount', 'max').fill('12000000'); await count(1);
-  await page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true }).click();
   await count(1);
-  expect(await page.getByRole('img', { name: /Նոյեմբեր՝ 12\s000\s000 AMD, 1 գործարք/ }).count()).toBe(1);
-  expect(await page.getByRole('button', { name: /^Խնդրահարույց գործարքներ/ }).innerText()).toMatch(/1/);
+  expect(await page.getByTestId('statistics-amount').innerText()).toBe('12 մլն ֏');
   await selectPeriod('custom');
   await input('date', 'min').fill('2026-11-01'); await input('date', 'max').fill('2026-10-01');
   await input('amount', 'min').fill('13000000');
@@ -74,7 +72,6 @@ test('global defaults, all five intersecting filters, complex last selection and
   for (const button of [tower(), hills(), all()]) expect(await button.getAttribute('aria-pressed')).toBe('true');
   for (const kind of ['amount', 'area']) for (const side of ['min', 'max']) expect(await input(kind, side).inputValue()).toBe('');
   expect(await page.getByRole('alert').count()).toBe(0);
-  expect(await page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true }).getAttribute('aria-pressed')).toBe('true');
   await selectPeriod('custom');
   expect(await input('date', 'min').inputValue()).toBe(''); expect(await input('date', 'max').inputValue()).toBe('');
   await reset().click(); await reset().click(); await count(3);
@@ -102,11 +99,9 @@ test('every preset applies, custom values and invalid drafts survive preset swit
   expect(await input('date', 'min').inputValue()).toBe('2026-01-01');
   expect(await input('date', 'max').inputValue()).toBe('2025-12-31');
   expect(await page.getByRole('alert').count()).toBe(1); await count(1);
-  await page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true }).click();
-  await count(0); expect(await page.locator('svg .chart-column[role="img"]').count()).toBe(12);
+  await count(1);
   await input('date', 'min').fill('2025-01-01');
-  await input('date', 'max').fill(''); await count(3);
-  await page.getByRole('button', { name: 'Սենյակների քանակ', exact: true }).click(); await count(4);
+  await input('date', 'max').fill(''); await count(4);
   await input('date', 'min').fill('2026-11-10'); await input('date', 'max').fill('2026-11-10'); await count(1);
   await page.reload(); await ready(); expect(await period().inputValue()).toBe('year'); await count(3);
 });

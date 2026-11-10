@@ -3,7 +3,7 @@ const { createFixture, deal } = require('../support/crm-fixture.cjs');
 let fixture, server, url, release;
 const period = () => page.getByRole('combobox', { name: 'Կնքման ժամանակահատված', exact: true });
 const panel = () => page.getByRole('form', { name: 'Զտիչներ', exact: true });
-const ready = () => page.locator('footer time').waitFor();
+const ready = () => page.getByTestId('statistics-count').waitFor();
 const near = (a, b) => expect(Math.abs(a - b)).toBeLessThan(1);
 beforeEach(async () => {
   await page.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
@@ -96,7 +96,7 @@ test.each([1440, 1920])('errors, initial loading, refresh failure and recovery p
   await button('Թարմացնել հաշվետվությունը').click(); await page.locator('.filter-notice').waitFor();
   size(await panel().boundingBox(), reference); expect(await period().isVisible()).toBe(false);
   release(); fixture.state.gate = null;
-  await page.getByText('Չհաջողվեց բեռնել տվյալները։ Փորձեք կրկին։').waitFor();
+  await page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' }).waitFor();
   size(await panel().boundingBox(), reference);
   await page.screenshot({ path: `test-results/stable-panel-${width}-unavailable.png`, fullPage: true });
   fixture.state.failPage = undefined; await button('Թարմացնել հաշվետվությունը').click(); await ready();
@@ -163,7 +163,7 @@ test('touch opens the month popup and keeps the mobile grid usable', async () =>
   const context = await page.context().browser().newContext({ hasTouch: true, viewport: { width: 375, height: 812 } });
   try {
     const touch = await context.newPage(); await touch.clock.setFixedTime(new Date('2026-11-15T10:00:00Z'));
-    await touch.goto(url); await touch.locator('footer time').waitFor();
+    await touch.goto(url); await touch.getByTestId('statistics-count').waitFor();
     await touch.getByRole('combobox', { name: 'Կնքման ժամանակահատված', exact: true }).selectOption('month');
     await touch.getByRole('button', { name: 'Ամիսներ', exact: true }).tap();
     const popup = touch.getByRole('dialog', { name: 'Ամիսների ընտրություն' }); await popup.waitFor();

@@ -5,9 +5,9 @@ const period = () => page.getByRole('combobox', { name: 'Կնքման ժաման
 const quick = () => page.getByRole('combobox', { name: 'Արագ ընտրություն', exact: true });
 const year = () => page.getByRole('combobox', { name: 'Տարի', exact: true });
 const button = name => page.getByRole('button', { name, exact: true });
-const ready = () => page.locator('footer time').waitFor();
+const ready = () => page.getByTestId('statistics-count').waitFor();
 const count = async n => {
-  expect(await page.getByTestId('total-count').innerText()).toBe(`Գործարքների քանակ՝ ${n}`);
+  expect(await page.getByTestId('statistics-count').innerText()).toBe(String(n));
   expect(await page.getByTestId('kpi-count').getByTestId('kpi-value').innerText()).toBe(String(n));
 };
 beforeEach(async () => {

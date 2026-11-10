@@ -23,7 +23,7 @@ const selectPeriod = async value => {
 const selectYear = async value => { await year().selectOption(value); };
 
 const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի արժեք (֏)', area: 'Մակերես (մ²)', date: 'Կնքման ժամանակահատված' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
-const ready = () => page.locator('footer time').waitFor();
+const ready = () => page.getByTestId('statistics-count').waitFor();
 const open = async () => { await page.goto(url); await ready(); };
 const refresh = async () => { await button('Թարմացնել հաշվետվությունը').click(); await ready(); };
 const expectValue = async (metric, expected) => expect(await value(metric).innerText()).toBe(expected);
@@ -79,13 +79,11 @@ test('both KPIs apply every filter to current, baseline and ranking without new 
   await expectValue('count', '2'); await expectValue('amount', '300 ֏');
   expect(await delta('count').innerText()).toBe('+1\n+100%'); expect(await delta('amount').innerText()).toBe('+150 ֏\n+100%');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.10.2026 – 15.10.2026');
-  expect(await button('Խնդրահարույց գործարքներ 2').isVisible()).toBe(true);
   await input('amount', 'max').fill('100'); await expectValue('count', '1'); expect(await delta('count').innerText()).toBe('+1\n—');
   await input('amount', 'max').fill('200'); await input('area', 'min').fill('51'); await input('area', 'max').fill('60'); await expectValue('count', '0');
   await input('area', 'min').fill('50'); await input('area', 'max').fill('50');
   await selectPeriod('all'); await expectValue('count', '3'); await expectValue('amount', '450 ֏');
   expect(await rows('count').first().innerText()).toMatch(/Նոյեմբեր 2026[\s\S]*2$/);
-  await button('Կնքման ամսաթիվ').click(); await expectValue('amount', '450 ֏');
   await button('Վերականգնել').click(); expect(await period().inputValue()).toBe('year');
   expect(requests).toBe(1); expect(fixture.state.reads).toBe(1);
 });
@@ -103,8 +101,7 @@ test('consecutive and nonconsecutive month and quarter selections show their dis
   await selectUnits('quarter', 2025, [1, 3]); await expectValue('amount', '300 ֏');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2024 – 31.03.2024; 01.07.2024 – 30.09.2024');
   await selectPeriod('year'); await selectYear('2025'); await expectValue('amount', '780 ֏');
-  await button('Կնքման ամսաթիվ').click(); await expectValue('amount', '780 ֏');
-  expect(await page.getByTestId('total-count').innerText()).toBe('Գործարքների քանակ՝ 0');
+  expect(await page.getByTestId('statistics-count').innerText()).toBe('12');
   expect(await dates().innerText()).toBe('Համեմատություն՝ 01.01.2024 – 31.12.2024');
 });
 
@@ -158,14 +155,13 @@ test('rankings sort each metric independently and retain zero periods, equal ran
   expect(await rows('count').count()).toBe(17); expect(await rows('count').evaluateAll(els => els.every(el => el.value === 1))).toBe(true);
 });
 
-test('independent ranking memory, expansion, reset and grouping never request new data', async () => {
+test('independent ranking memory, expansion, reset never request new data', async () => {
   fixture.state.items = history(); let requests = 0;
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/report') requests++; });
   await open(); await selectPeriod('all');
   expect(await rows('count').count()).toBe(5); expect(await rows('amount').count()).toBe(5);
   await types('count', 'Ցույց տալ բոլորը').click(); expect(await rows('count').count()).toBe(35); expect(await rows('amount').count()).toBe(5);
   expect(await types('count', 'Թաքցնել').getAttribute('aria-expanded')).toBe('true');
-  await button('Կնքման ամսաթիվ').click(); expect(await rows('count').count()).toBe(35);
   await types('count', 'Եռամսյակներ').click(); expect(await rows('count').count()).toBe(5);
   expect(await types('amount', 'Ամիսներ').getAttribute('aria-pressed')).toBe('true');
   await types('amount', 'Տարիներ').click(); expect(await rows('amount').count()).toBe(3);
@@ -220,9 +216,7 @@ test.each([1440, 768, 375])('cards and long values fit at %i px; rankings work w
   await page.setViewportSize({ width, height: 1100 }); await open();
   const count = await card('count').boundingBox(), amount = await card('amount').boundingBox();
   const filter = await page.getByRole('form', { name: 'Զտիչներ' }).boundingBox();
-  const grouping = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
   expect(count.y).toBeGreaterThanOrEqual(filter.y + filter.height);
-  expect(grouping.y).toBeGreaterThanOrEqual(amount.y + amount.height);
   if (width >= 768) { expect(count.y).toBe(amount.y); expect(Math.abs(count.width - amount.width)).toBeLessThan(1); }
   else expect(amount.y).toBeGreaterThanOrEqual(count.y + count.height);
   const container = await page.getByTestId('kpi-container').boundingBox();
@@ -481,9 +475,9 @@ test.each([1440, 1920])('desktop frame, legends, full tooltip and scrolling stay
   const baseline = await frame.boundingBox();
   const filter = await page.getByRole('form', { name: 'Զտիչներ' }).boundingBox();
   expect(baseline.height).toBe(filter.height * 2);
-  const axisTitle = await page.getByRole('heading', { name: 'Y · Ընդհանուր արժեք (֏)', exact: true }).boundingBox();
+  const topPanels = await page.locator('.report-top-panels').boundingBox();
   const section = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն', exact: true }).boundingBox();
-  const inset = axisTitle.x - section.x;
+  const inset = topPanels.x - section.x;
   expect(baseline.x - section.x).toBeCloseTo(inset, 0);
   expect(section.x + section.width - baseline.x - baseline.width).toBeCloseTo(inset, 0);
   const shadow = await frame.evaluate(el => getComputedStyle(el).boxShadow);

@@ -32,7 +32,7 @@ beforeEach(async () => {
     child.once('error', reject);
   });
   await page.goto(`http://127.0.0.1:${port}`);
-  await page.locator('footer time').waitFor();
+  await page.getByTestId('statistics-count').waitFor();
 });
 afterEach(async () => {
   await stopChild();
@@ -45,12 +45,12 @@ test('saving UI and shared calculation code rebuilds and refreshes the open repo
   const app = await fs.readFile(appPath, 'utf8');
   await fs.writeFile(appPath, app.replace('Հաշվետվություններ</p>', 'Ավտոմատ թարմացում</p>'));
   await page.getByText('Ավտոմատ թարմացում', { exact: true }).waitFor();
-  await page.locator('footer time').waitFor();
-  const filterPath = path.join(root, 'src/report/filter.cjs');
+  await page.getByTestId('statistics-count').waitFor();
+  const filterPath = path.join(root, 'src/report/statistics.cjs');
   const filter = await fs.readFile(filterPath, 'utf8');
-  await fs.writeFile(filterPath, filter.replace('count: 0 });', 'count: 10 });'));
-  // Six room buckets plus one deal through today; the December sale is still in the future.
-  await page.getByTestId('total-count').filter({ hasText: 'Գործարքների քանակ՝ 61' }).waitFor();
+  await fs.writeFile(filterPath, filter.replace('count:selected.length', 'count:selected.length + 10'));
+  // One deal through today plus the edited shared total; December is still in the future.
+  await page.getByTestId('statistics-count').filter({ hasText: /^11$/ }).waitFor();
   expect(errors).toEqual([]);
   for (const route of ['/.env', '/src/ui/App.vue', '/server.js']) {
     expect((await page.request.get(new URL(route, page.url()).href)).status()).toBe(404);
@@ -72,7 +72,7 @@ test('a failed rebuild keeps the current page and a corrected file updates it', 
   expect(await page.evaluate(() => window.previousPage)).toBe(true);
   const navigation = page.waitForEvent('framenavigated', (frame) => frame === page.mainFrame());
   await fs.writeFile(mainPath, original);
-  await navigation; await page.locator('footer time').waitFor();
+  await navigation; await page.getByTestId('statistics-count').waitFor();
   expect(await page.evaluate(() => window.previousPage)).toBeUndefined();
 });
 
@@ -102,12 +102,12 @@ test('npm run dev stays running, reloads UI and restarts once after a server edi
   });
   await started;
   await page.goto(`http://127.0.0.1:${port}`);
-  await page.getByRole('alert').waitFor();
+  await page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' }).waitFor();
   const appPath = path.join(root, 'src/ui/App.vue');
   const app = await fs.readFile(appPath, 'utf8');
   await fs.writeFile(appPath, app.replace('Հաշվետվություններ</p>', 'CLI ավտոմատ թարմացում</p>'));
   await page.getByText('CLI ավտոմատ թարմացում', { exact: true }).waitFor();
-  await page.getByRole('alert').waitFor();
+  await page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' }).waitFor();
   expect(output.match(/Автообновление включено:/g)).toHaveLength(1);
   // A server-side module edit must restart the process and reconnect the browser.
   // Tailwind can rebuild first when server.js changes; wait for the new process,
@@ -116,7 +116,7 @@ test('npm run dev stays running, reloads UI and restarts once after a server edi
     && (output.match(/Автообновление включено:/g) || []).length === 2);
   await fs.appendFile(path.join(root, 'server.js'), '\n// CLI restart regression\n');
   await reloaded;
-  try { await page.getByRole('alert').waitFor(); }
+  try { await page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' }).waitFor(); }
   catch (error) { console.log({ output, diagnostics, html: await page.content() }); throw error; }
   await page.getByText('CLI ավտոմատ թարմացում', { exact: true }).waitFor();
   expect(output.match(/Автообновление включено:/g)).toHaveLength(2);

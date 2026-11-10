@@ -1,13 +1,9 @@
 const fs = require('node:fs');
 const { createServer } = require('../../server.js');
-const { createFixture, deal, sampleItems } = require('../support/crm-fixture.cjs');
+const { createFixture, deal } = require('../support/crm-fixture.cjs');
 let fixture, server, url, release;
-const rooms = () => page.getByRole('button', { name: 'Սենյակների քանակ', exact: true });
-const months = () => page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true });
-const problems = () => page.getByRole('button', { name: /^Խնդրահարույց գործարքներ/ });
 const refresh = () => page.getByRole('button', { name: 'Թարմացնել հաշվետվությունը', exact: true });
-const columns = () => page.locator('svg .chart-column[role="img"]');
-const ready = async () => { await page.locator('footer time').waitFor(); };
+const ready = async () => { await page.getByTestId('statistics-count').waitFor(); };
 async function reloadReport() { await refresh().click(); await ready(); }
 beforeEach(async () => {
   await page.setViewportSize({ width: 1024, height: 1100 });
@@ -18,202 +14,44 @@ beforeEach(async () => {
 });
 afterEach(async () => { release?.(); release = undefined; server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
 
-test('apartments alone determine charts and problem list, refresh removes changed property types', async () => {
-  fixture.state.items = [
-    deal(1, { opportunity: '100' }), deal(2, { opportunity: '200', ufCrmDate: null }),
-    deal(3, { ufCrmRooms: null, opportunity: '50' }),
-    deal(4, { ufCrmProperty: '72', ufCrmRooms: 20, opportunity: '900', ufCrmDate: null }),
-    ...['73', '74', undefined].map((ufCrmProperty, i) => deal(i + 5, { ufCrmProperty, ufCrmRooms: null, ufCrmDate: null })),
-  ];
-  await page.goto(url); await ready();
-  expect(await columns().count()).toBe(2);
-  await page.getByRole('img', { name: '2՝ 100 AMD, 1 գործարք', exact: true }).hover();
-  expect(await page.getByRole('img', { name: /100 AMD, 1 գործարք/ }).getByTestId('bar-amount').textContent()).toBe('100 ֏');
-  expect(await page.getByRole('img', { name: /100 AMD, 1 գործարք/ }).getByTestId('bar-count').textContent()).toBe('1 գործարք');
-  for (const mode of [rooms(), months()]) {
-    await mode.click();
-    expect(await problems().innerText()).toMatch(/2/);
-    await problems().click();
-    const modal = page.getByRole('dialog'); await modal.waitFor();
-    expect(await modal.getByRole('link').allTextContents()).toEqual(['2', '3']);
-    expect(await modal.innerText()).toContain('Կնքման ամսաթիվ՝ Լրացված չէ');
-    expect(await modal.innerText()).toContain('Սենյակների քանակ՝ Լրացված չէ');
-    await page.getByRole('button', { name: 'Փակել' }).click();
-  }
-  await page.getByRole('img', { name: 'Հունվար՝ 100 AMD, 1 գործարք', exact: true }).hover();
-  expect(await page.getByRole('img', { name: /100 AMD, 1 գործարք/ }).getByTestId('bar-amount').textContent()).toBe('100 ֏');
-  expect(fixture.state.reads).toBe(1);
-  fixture.state.items[1].ufCrmProperty = '72';
-  await reloadReport();
-  expect(await months().getAttribute('aria-pressed')).toBe('true');
-  expect(await problems().innerText()).toMatch(/1/);
-  await rooms().click();
-  expect(await page.getByRole('img', { name: '2՝ 100 AMD, 1 գործարք', exact: true }).count()).toBe(1);
-  await problems().click();
-  expect(await page.getByRole('dialog').getByRole('link').allTextContents()).toEqual(['3']);
-  await page.getByRole('button', { name: 'Փակել' }).click();
-  fixture.state.items[2].ufCrmProperty = '72';
-  await reloadReport(); expect(await problems().count()).toBe(0);
-  fixture.state.items[0].ufCrmProperty = '72';
-  await reloadReport();
-  expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  expect(await columns().count()).toBe(0); expect(await problems().count()).toBe(0);
-  await months().click(); expect(await columns().count()).toBe(12);
-  expect(await columns().first().getAttribute('aria-label')).toBe('Հունվար՝ 0 AMD, 0 գործարք');
+const loadingStatus = () => page.locator('.statistics-status').filter({ hasText: 'Տվյալները բեռնվում են…' });
+const failedStatus = () => page.locator('.statistics-status').filter({ hasText: 'Տվյալներն անհասանելի են։' });
+const emptyStatus = () => page.locator('.statistics-body').getByRole('status').filter({ hasText: 'Տվյալներ չկան' });
+const expectTotals = async (count, amount) => {
+  expect(await page.getByTestId('statistics-count').innerText()).toBe(String(count));
+  if (amount !== undefined) expect(await page.getByTestId('statistics-amount').innerText()).toBe(amount);
+};
+
+test('only valid apartments contribute to statistics and KPIs after refresh', async () => {
+  fixture.state.items = [deal(1, { opportunity: '100' }), deal(2, { ufCrmProperty: '72', opportunity: '999' }),
+    deal(3, { ufCrmDate: null }), deal(4, { ufCrmArea: null })];
+  await page.goto(url); await ready(); await expectTotals(1, '100 ֏');
+  expect(await page.getByTestId('kpi-count').getByTestId('kpi-value').innerText()).toBe('1');
+  fixture.state.items[0].ufCrmProperty = '72'; await reloadReport(); await expectTotals(0, '0 ֏');
+  expect(await emptyStatus().isVisible()).toBe(true);
+  fixture.state.items = [deal(1, { ufCrmRooms: 6, opportunity: 0 })];
+  await reloadReport(); await expectTotals(0, '0 ֏');
 });
 
-test('starts with rooms, displays totals and every month, and switches without reading CRM again', async () => {
-  await page.goto(url); await ready();
-  expect(await rooms().getAttribute('aria-pressed')).toBe('true');
-  expect(await columns().count()).toBe(6);
-  const second = page.getByRole('img', { name: '2՝ 10 AMD, 1 գործարք', exact: true });
-  expect(await second.getByTestId('bar-amount').textContent()).toBe('10 ֏');
-  expect(await second.getByTestId('bar-count').textContent()).toBe('1 գործարք');
-  await months().click(); expect(await columns().count()).toBe(12);
-  expect(await page.getByRole('combobox', { name: 'Տարի', exact: true }).inputValue()).toBe('2026');
-  expect(await page.locator('svg, footer').getByText('2026', { exact: true }).count()).toBe(0);
-  expect(await page.getByRole('img', { name: 'Հունվար՝ 10 AMD, 1 գործարք', exact: true }).count()).toBe(1);
-  for (const name of ['Հունվար', 'Փետրվար', 'Մարտ', 'Ապրիլ', 'Մայիս', 'Հունիս', 'Հուլիս', 'Օգոստոս', 'Սեպտեմբեր', 'Հոկտեմբեր', 'Նոյեմբեր', 'Դեկտեմբեր']) expect(await page.getByLabel('Գծապատկերի տարածք', { exact: true }).locator('svg').getByText(name, { exact: true }).count()).toBe(1);
-  await rooms().click(); expect(await second.count()).toBe(1); expect(fixture.state.reads).toBe(1);
-});
-test('same unique all-time problem list in both modes, safe links, only IDs and reasons', async () => {
-  await page.goto(url); await ready();
-  expect(await problems().innerText()).toMatch(/5/);
-  let first;
-  for (const button of [rooms(), months()]) {
-    await button.click(); await problems().click();
-    const modal = page.getByRole('dialog'); await modal.waitFor();
-    const rows = await modal.getByRole('listitem').allTextContents();
-    expect(rows).toHaveLength(5);
-    if (first) expect(rows).toEqual(first); else first = rows;
-    expect(rows[2]).toContain('Սենյակների քանակ՝ Լրացված չէ');
-    expect(rows[2]).toContain('Կնքման ամսաթիվ՝ Լրացված չէ');
-    expect(rows[3]).toContain('Սենյակների քանակ՝ Անվավեր արժեք');
-    expect(rows[3]).toContain('Ընդհանուր արժեք՝ Անվավեր արժեք');
-    const links = modal.getByRole('link'); expect(await links.allTextContents()).toEqual(['4', '5', '6', '7', '8']);
-    for (let i = 0; i < 5; i++) {
-      expect(await links.nth(i).getAttribute('href')).toBe(`https://portal.example/crm/deal/details/${i + 4}/`);
-      expect(await links.nth(i).getAttribute('target')).toBe('_blank');
-      expect(await links.nth(i).getAttribute('rel')).toBe('noopener noreferrer');
-    }
-    expect(await modal.innerText()).not.toContain('AMD');
-    await page.getByRole('button', { name: 'Փակել' }).click(); await modal.waitFor({ state: 'hidden' });
-    expect(await problems().evaluate((el) => el === document.activeElement)).toBe(true);
-  }
-});
-test('refresh replaces totals, closes list, preserves mode and recalculates year', async () => {
-  await page.goto(url); await ready(); await months().click();
-  await columns().first().focus(); expect(await page.getByRole('tooltip').count()).toBe(0);
-  fixture.state.items = [deal(1, { opportunity: '77.125', ufCrmDate: '2027-01-01' })];
-  fixture.state.time = '2026-12-31T20:00:00Z';
-  await page.clock.setFixedTime(new Date(fixture.state.time));
-  await reloadReport();
-  expect(await months().getAttribute('aria-pressed')).toBe('true');
-  expect(await page.getByRole('tooltip').count()).toBe(0); expect(await problems().count()).toBe(0);
-  expect(await page.getByRole('combobox', { name: 'Տարի', exact: true }).inputValue()).toBe('2027');
-  expect(await page.locator('svg, footer').getByText('2027', { exact: true }).count()).toBe(0);
-  expect(await page.getByRole('img', { name: 'Հունվար՝ 77.125 AMD, 1 գործարք', exact: true }).count()).toBe(1);
-  expect(fixture.state.reads).toBe(2);
-});
-test('loading hides old data and disables refresh, last-page failure is not partial success, then recovery and empty result', async () => {
+test('header refresh hides old data, disables during loading, recovers from last-page failure and handles empty results', async () => {
   const heading = page.getByRole('heading', { name: 'Կնքված բնակարանների հաշվետվություն', level: 1, exact: true });
-  fixture.state.gate = new Promise((resolve) => { release = resolve; });
-  await page.goto(url);
-  await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
+  fixture.state.gate = new Promise(resolve => { release = resolve; });
+  await page.goto(url); await loadingStatus().waitFor();
   expect(await heading.isVisible()).toBe(true);
-  expect(await refresh().isDisabled()).toBe(true); expect(await columns().count()).toBe(0);
+  expect(await refresh().isDisabled()).toBe(true);
+  expect(await page.getByTestId('statistics-count').count()).toBe(0);
   release(); fixture.state.gate = null; await ready();
   fixture.state.items = Array.from({ length: 51 }, (_, i) => deal(i + 1)); fixture.state.failPage = 50;
-  fixture.state.gate = new Promise((resolve) => { release = resolve; });
-  await refresh().click(); await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
-  expect(await heading.isVisible()).toBe(true);
-  expect(await refresh().isDisabled()).toBe(true); expect(await columns().count()).toBe(0); expect(await problems().count()).toBe(0);
-  release(); fixture.state.gate = null;
-  await page.getByRole('alert').waitFor();
-  expect(await heading.isVisible()).toBe(true);
-  expect(await page.getByRole('alert').innerText()).toBe('Չհաջողվեց բեռնել տվյալները։ Փորձեք կրկին։');
-  expect(await columns().count()).toBe(0); expect(await refresh().isDisabled()).toBe(false);
-  fixture.state.failPage = undefined; await reloadReport();
-  expect(await heading.isVisible()).toBe(true);
-  expect(await page.getByRole('img', { name: '2՝ 510 AMD, 51 գործարք', exact: true }).count()).toBe(1);
-  fixture.state.items = []; await reloadReport();
-  expect(await heading.isVisible()).toBe(true);
-  expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  expect(await columns().count()).toBe(0); expect(await problems().count()).toBe(0);
-  await months().click(); expect(await columns().count()).toBe(12);
-  expect(await columns().first().getAttribute('aria-label')).toBe('Հունվար՝ 0 AMD, 0 գործարք');
-});
-test('all-problem empty case and zero-amount six-room deal keep the correct X ranges', async () => {
-  fixture.state.items = [deal(1, { ufCrmRooms: null, ufCrmDate: null, opportunity: 0 })];
-  await page.goto(url); await ready();
-  expect(await columns().count()).toBe(0); expect(await problems().innerText()).toMatch(/1/);
-  expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  await months().click(); expect(await columns().count()).toBe(12);
-  fixture.state.items = [deal(1, { ufCrmRooms: 6, opportunity: 0 })]; await reloadReport(); await rooms().click();
-  expect(await columns().count()).toBe(0);
-  await problems().click(); expect(await page.getByRole('dialog').innerText()).toContain('Ընդհանուր արժեք՝ Անվավեր արժեք');
-});
-test('full amounts and counts are always visible in both modes, including zero categories, without tooltip', async () => {
-  fixture.state.items = [deal(1, { opportunity: 0.1 }), deal(2, { opportunity: 0.2 }), deal(3, { ufCrmRooms: 6, opportunity: '1234567890.123456', ufCrmDate: '2026-02-01' })];
-  await page.goto(url); await ready();
-  for (const mode of [rooms(), months()]) {
-    await mode.click();
-    const small = page.getByRole('img', { name: /0.3 AMD, 2 գործարք/ });
-    const large = page.getByRole('img', { name: /1\s234\s567\s890\.123456 AMD, 1 գործարք/ });
-    expect(await small.getByTestId('bar-amount').textContent()).toBe('0.3 ֏');
-    expect(await small.getByTestId('bar-count').textContent()).toBe('2 գործարք');
-    expect(await large.getByTestId('bar-amount').textContent()).toBe('1 234 567 890.123456 ֏');
-    expect(await large.getByTestId('bar-count').textContent()).toBe('1 գործարք');
-    const zero = page.getByRole('img', { name: /՝ 0 AMD, 0 գործարք/ }).first();
-    expect(await zero.getByTestId('bar-amount').textContent()).toBe('0 ֏');
-    expect(await zero.getByTestId('bar-count').textContent()).toBe('0 գործարք');
-    await small.focus(); await small.press('Enter'); await small.press('Space'); await small.press('Escape');
-    await large.hover(); await large.click();
-    expect(await page.getByRole('tooltip').count()).toBe(0);
-    expect(await small.getByTestId('bar-amount').isVisible()).toBe(true);
-    expect(await page.getByLabel('Գծապատկերի տարածք', { exact: true }).locator('svg').textContent()).toContain('մլրդ');
-  }
-});
-test('modal traps and restores focus and closes with Escape, close button and backdrop', async () => {
-  await page.goto(url); await ready(); await problems().click();
-  const modal = page.getByRole('dialog'); await modal.waitFor();
-  const close = page.getByRole('button', { name: 'Փակել' });
-  await close.focus(); await page.keyboard.press('Shift+Tab');
-  expect(await modal.getByRole('link').last().evaluate((el) => el === document.activeElement)).toBe(true);
-  await page.keyboard.press('Tab'); expect(await close.evaluate((el) => el === document.activeElement)).toBe(true);
-  await page.keyboard.press('Escape'); await modal.waitFor({ state: 'hidden' });
-  expect(await problems().evaluate((el) => el === document.activeElement)).toBe(true);
-  await problems().click(); await close.click(); await modal.waitFor({ state: 'hidden' });
-  await problems().click(); await page.mouse.click(2, 2); await modal.waitFor({ state: 'hidden' });
-  expect(await problems().evaluate((el) => el === document.activeElement)).toBe(true);
-});
-test('wide and narrow layout keeps controls outside graph scroll and long problem list scrolls internally', async () => {
-  fixture.state.items = [...sampleItems(), ...Array.from({ length: 100 }, (_, i) => deal(i + 9, { ufCrmDate: null }))];
-  await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await ready();
-  const section = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).boundingBox();
-  const group = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
-  expect(Math.abs(group.x + group.width / 2 - section.x - section.width / 2)).toBeLessThan(2);
-  fs.mkdirSync('test-results', { recursive: true });
-  await page.screenshot({ path: 'test-results/report-wide.png', fullPage: true });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.locator('.kpi-wide').waitFor({ state: 'detached' });
-  const scroll = page.getByLabel('Գծապատկերի տարածք');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect(await scroll.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-  const before = await refresh().boundingBox();
-  await scroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
-  expect(await refresh().boundingBox()).toEqual(before);
-  const narrowGroup = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
-  expect(before.y).toBeGreaterThan(narrowGroup.y + narrowGroup.height);
-  await scroll.evaluate((el) => { el.scrollLeft = 0; });
-  await page.screenshot({ path: 'test-results/report-narrow.png', fullPage: true });
-  await problems().click();
-  const modal = page.getByRole('dialog'); await modal.waitFor();
-  expect(await modal.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-  await modal.getByRole('link').last().focus();
-  expect(await modal.evaluate((el) => el.scrollTop > 0)).toBe(true);
-  expect(await modal.getByRole('link').last().innerText()).toBe('108');
-  await page.screenshot({ path: 'test-results/report-modal.png', fullPage: true });
+  fixture.state.gate = new Promise(resolve => { release = resolve; });
+  await refresh().click(); await loadingStatus().waitFor();
+  expect(await refresh().isDisabled()).toBe(true);
+  expect(await page.getByTestId('statistics-count').count()).toBe(0);
+  release(); fixture.state.gate = null; await failedStatus().waitFor();
+  expect(await heading.isVisible()).toBe(true); expect(await refresh().isEnabled()).toBe(true);
+  expect(await page.locator('svg').count()).toBe(0);
+  fixture.state.failPage = undefined; await reloadReport(); await expectTotals(51, '510 ֏');
+  fixture.state.items = []; await reloadReport(); await expectTotals(0, '0 ֏');
+  expect(await emptyStatus().isVisible()).toBe(true); expect(await heading.isVisible()).toBe(true);
 });
 
 const input = (kind, side) => page.getByLabel(`${{ amount: 'Բնակարանի արժեք (֏)', area: 'Մակերես (մ²)', date: 'Կնքման ժամանակահատված' }[kind]}՝ ${side === 'min' ? 'Սկսած' : 'Մինչև'}`, { exact: true });
@@ -226,7 +64,6 @@ const clearRanges = async () => {
     await input(kind, 'min').fill(''); await input(kind, 'max').fill('');
   }
 };
-const labels = () => columns().evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
 const baseFilters = async () => { fixture.state.items = require('../support/crm-fixture.cjs').filterItems(); await page.goto(url); await ready(); await period().selectOption('custom'); };
 
 const filterPanel = () => page.getByRole('form', { name: 'Զտիչներ', exact: true });
@@ -311,8 +148,6 @@ test.each([1440, 1920, 1024, 375, 320])('filter layout reflows without scrolling
     expect(await filterArea().evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
     await filterArea().evaluate((el) => { el.scrollLeft = el.scrollWidth; });
     expect(await filterArea().evaluate((el) => el.scrollLeft)).toBe(0);
-    const graphScroll = page.getByLabel('Գծապատկերի տարածք', { exact: true });
-    await graphScroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
     expect(await filterArea().evaluate((el) => el.scrollLeft)).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `test-results/filters-layout-${width}-${count}.png`, fullPage: true, animations: 'disabled' });
@@ -390,11 +225,11 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
   expect(await input('date', 'min').evaluate((el) => el.validity.badInput)).toBe(true);
   await assertHint('date', 'min', false);
   await input('date', 'min').fill('2026-01-01');
-  const applied = await labels();
+  const applied = await page.locator('.statistics-totals').allTextContents();
   await input('date', 'min').focus(); await input('date', 'min').press('ArrowRight'); await input('date', 'min').press('Backspace');
   expect(await input('date', 'min').evaluate((el) => el.validity.badInput)).toBe(true);
   expect(await input('date', 'min').getAttribute('aria-invalid')).toBe('true');
-  await assertHint('date', 'min', false); expect(await labels()).toEqual(applied);
+  await assertHint('date', 'min', false); expect(await page.locator('.statistics-totals').allTextContents()).toEqual(applied);
   await input('date', 'max').focus(); await assertHint('date', 'min', false);
   await filterPanel().screenshot({ path: `test-results/filters-hints-${width}-date-partial.png`, animations: 'disabled' });
   await input('date', 'min').fill(''); await assertHint('date', 'min', true);
@@ -496,12 +331,12 @@ test('excluding five-room apartments survives batched refreshes while reusing me
   await room(1).click();
   for (const n of [2, 3, 4]) await room(n).click();
   expect(await room(5).getAttribute('aria-pressed')).toBe('false');
-  expect(await columns().count()).toBe(4);
+  await expectTotals(401);
   expect(fixture.state.httpRequests).toHaveLength(initial);
   for (let run = 1; run <= 3; run++) {
     await reloadReport();
     expect(await room(5).getAttribute('aria-pressed')).toBe('false');
-    expect(await columns().count()).toBe(4);
+    await expectTotals(401);
     expect(fixture.state.httpRequests).toHaveLength(initial + run * 2);
     expect(fixture.state.requests.filter((r) => r.method !== 'crm.item.list')).toHaveLength(3);
   }
@@ -509,123 +344,87 @@ test('excluding five-room apartments survives batched refreshes while reusing me
   expect(errors).toEqual([]);
 });
 
-test('filters intersect instantly, keep global problems, preserve mode and never fetch again', async () => {
-  let requests = 0; page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/report') requests++; });
-  await baseFilters();
-  expect(await labels()).toEqual(['1՝ 100.1 AMD, 1 գործարք', '2՝ 600.6 AMD, 2 գործարք', '3՝ 300.3 AMD, 1 գործարք']);
-  await columns().first().hover(); expect(await page.getByRole('tooltip').count()).toBe(0);
-  await room(2).click(); expect(await page.getByRole('tooltip').count()).toBe(0);
-  await room(2).click(); expect(await room(2).getAttribute('aria-pressed')).toBe('true');
+test('all five filters intersect instantly without fetching again', async () => {
+  let requests = 0; page.on('request', request => { if (new URL(request.url()).pathname === '/api/report') requests++; });
+  await baseFilters(); await expectTotals(4, '1 հազ. ֏');
+  await room(2).click(); await room(2).click();
+  expect(await room(2).getAttribute('aria-pressed')).toBe('true');
   for (const [kind, min, max] of [['amount', '150', '350'], ['area', '60', '70'], ['date', '2026-01-01', '2026-12-31']]) {
     await input(kind, 'min').fill(min); await input(kind, 'max').fill(max);
   }
-  expect(await labels()).toEqual(['2՝ 200.2 AMD, 1 գործարք']);
-  expect(await input('date', 'max').evaluate((el) => el === document.activeElement)).toBe(true);
-  await months().click(); expect(await columns().count()).toBe(12);
-  expect(await columns().nth(5).getAttribute('aria-label')).toBe('Հունիս՝ 200.2 AMD, 1 գործարք');
-  expect(await page.getByText('2026 · Սկսած 2026-01-01 · Մինչև 2026-12-31', { exact: true }).count()).toBe(0);
-  await input('amount', 'max').fill('190'); expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  expect(await problems().innerText()).toMatch(/4/); await problems().click();
-  const modal = page.getByRole('dialog'); expect(await modal.getByRole('link').allTextContents()).toEqual(['5', '6', '7', '8']);
-  expect(await modal.innerText()).toContain('Մակերես (մ²)՝ Լրացված չէ');
-  expect(await modal.innerText()).not.toContain('500'); await page.keyboard.press('Escape');
-  await modal.waitFor({ state: 'hidden' });
-  // Native close restores focus asynchronously; complete that handoff before typing.
-  await page.waitForFunction(() => document.activeElement?.textContent.includes('Խնդրահարույց գործարքներ'));
-  await clearRanges(); await allRoomsButton().click(); expect(await months().getAttribute('aria-pressed')).toBe('true');
+  await expectTotals(1, '200,2 ֏');
+  expect(await input('date', 'max').evaluate(el => el === document.activeElement)).toBe(true);
+  await input('amount', 'max').fill('190'); await expectTotals(0, '0 ֏');
+  expect(await emptyStatus().isVisible()).toBe(true);
+  await clearRanges(); await allRoomsButton().click(); await expectTotals(4);
   expect(await input('amount', 'min').inputValue()).toBe('');
-  expect(await room(1).getAttribute('aria-pressed')).toBe('false');
   expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true');
   expect(fixture.state.reads).toBe(1); expect(requests).toBe(1);
 });
 
-test.each([
-  ['amount', '200,2', '300.3', ['1՝ 0 AMD, 0 գործարք', '2՝ 200.2 AMD, 1 գործարք', '3՝ 300.3 AMD, 1 գործարք']],
-  ['area', '65,5', '80', ['1՝ 0 AMD, 0 գործարք', '2՝ 600.6 AMD, 2 գործարք', '3՝ 300.3 AMD, 1 գործարք']],
-])('%s supports fractions, equal/open boundaries, zero and clearing', async (kind, min, max, expected) => {
-  await baseFilters(); await input(kind, 'min').fill(min); await input(kind, 'max').fill(max);
-  expect(await labels()).toEqual(expected);
-  await input(kind, 'max').fill(min.replace(',', '.'));
-  expect(await labels()).toEqual(['1՝ 0 AMD, 0 գործարք', '2՝ 200.2 AMD, 1 գործարք', '3՝ 0 AMD, 0 գործարք']);
-  await input(kind, 'min').fill(''); expect(await columns().first().getAttribute('aria-label')).toBe('1՝ 100.1 AMD, 1 գործարք');
+test.each([['amount', '200,2', '300.3', 2, '500,5 ֏'], ['area', '65,5', '80', 3, '900,9 ֏']])(
+  '%s supports fractions, equal and open boundaries, zero and clearing', async (kind, min, max, n, amount) => {
+  await baseFilters(); await input(kind, 'min').fill(min); await input(kind, 'max').fill(max); await expectTotals(n, amount);
+  await input(kind, 'max').fill(min.replace(',', '.')); await expectTotals(1, '200,2 ֏');
+  await input(kind, 'min').fill(''); await expectTotals(2, '300,3 ֏');
   await input(kind, 'min').fill('0'); expect(await input(kind, 'min').getAttribute('aria-invalid')).toBe('false');
-  await input(kind, 'max').fill('0'); expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  await input(kind, 'max').fill(''); expect(await columns().nth(1).getAttribute('aria-label')).toBe('2՝ 600.6 AMD, 2 գործարք');
-  await input(kind, 'min').fill(kind === 'area' ? '80' : '300.3');
-  expect(await columns().nth(1).getAttribute('aria-label')).toBe('2՝ 400.4 AMD, 1 գործարք');
+  await input(kind, 'max').fill('0'); await expectTotals(0); expect(await emptyStatus().isVisible()).toBe(true);
+  await input(kind, 'max').fill(''); await expectTotals(4);
+  await input(kind, 'min').fill(kind === 'area' ? '80' : '300.3'); await expectTotals(2, '700,7 ֏');
   expect(fixture.state.reads).toBe(1);
 });
 
-test.each([['area', '90'], ['date', '2026-01-15']])('%s includes the exact lower and upper boundary, including equal endpoints', async (kind, boundary) => {
+test.each([['area', '90'], ['date', '2026-01-15']])('%s includes exact lower and upper boundaries', async (kind, boundary) => {
   fixture.state.items = [
     deal(1, { opportunity: '1', ufCrmArea: '89.9999', ufCrmDate: '2026-01-14T23:59:59+04:00' }),
     deal(2, { opportunity: '2', ufCrmArea: '90', ufCrmDate: '2026-01-15T00:00:00+04:00' }),
     deal(3, { opportunity: '4', ufCrmArea: '90.000', ufCrmDate: '2026-01-15T23:59:59+04:00' }),
     deal(4, { opportunity: '8', ufCrmArea: '90.0001', ufCrmDate: '2026-01-16T00:00:00+04:00' }),
   ];
-  await page.goto(url); await ready();
+  await page.goto(url); await ready(); await clearRanges();
   const reads = fixture.state.reads;
-  for (const mode of [rooms(), months()]) {
-    await clearRanges(); await mode.click();
-    const category = await rooms().getAttribute('aria-pressed') === 'true' ? '2' : 'Հունվար';
-    const included = (amount, count) => page.getByRole('img', { name: `${category}՝ ${amount} AMD, ${count} գործարք`, exact: true }).waitFor();
-    await input(kind, 'min').fill(boundary); await included('14', 3);
-    await input(kind, 'max').fill(boundary); await included('6', 2);
-    expect(await page.getByRole('alert').count()).toBe(0);
-    await input(kind, 'min').fill(''); await included('7', 3);
-    await input(kind, 'max').fill(''); await included('15', 4);
-  }
+  await input(kind, 'min').fill(boundary); await expectTotals(3, '14 ֏');
+  await input(kind, 'max').fill(boundary); await expectTotals(2, '6 ֏');
+  expect(await page.getByRole('alert').count()).toBe(0);
+  await input(kind, 'min').fill(''); await expectTotals(3, '7 ֏');
+  await input(kind, 'max').fill(''); await expectTotals(4, '15 ֏');
   expect(fixture.state.reads).toBe(reads);
 });
 
-test('date endpoints include whole days, past years preserve twelve months and clearing removes bounds', async () => {
+test('date endpoints include whole days and past years, and clearing removes bounds', async () => {
   await baseFilters();
-  await input('date', 'min').fill('2026-01-01'); await input('date', 'max').fill('2026-12-31');
-  expect(await labels()).toEqual(['1՝ 100.1 AMD, 1 գործարք', '2՝ 600.6 AMD, 2 գործարք', '3՝ 0 AMD, 0 գործարք']);
-  await input('date', 'min').fill('2025-01-01'); await input('date', 'max').fill('2025-12-31');
-  expect(await columns().last().getAttribute('aria-label')).toBe('3՝ 300.3 AMD, 1 գործարք');
-  await months().click(); expect(await columns().count()).toBe(12);
-  expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  await input('date', 'max').fill(''); expect(await columns().first().getAttribute('aria-label')).toBe('Հունվար՝ 100.1 AMD, 1 գործարք');
+  await input('date', 'min').fill('2026-01-01'); await input('date', 'max').fill('2026-12-31'); await expectTotals(3, '700,7 ֏');
+  await input('date', 'min').fill('2025-01-01'); await input('date', 'max').fill('2025-12-31'); await expectTotals(1, '300,3 ֏');
+  await input('date', 'max').fill(''); await expectTotals(4);
   await input('date', 'min').fill(''); expect(await input('date', 'min').getAttribute('min')).toBeNull();
   expect(await input('date', 'max').getAttribute('max')).toBeNull();
 });
 
-test('invalid drafts retain last valid pair while other filters work; correction/clearing and refresh preserve semantics', async () => {
+test('invalid drafts retain the last valid pair while other filters and refresh still work', async () => {
   await baseFilters();
-  await input('area', 'min').fill('50'); await input('area', 'max').fill('80');
-  await input('area', 'min').fill('90');
+  await input('area', 'min').fill('50'); await input('area', 'max').fill('80'); await input('area', 'min').fill('90');
   expect(await input('area', 'min').getAttribute('aria-invalid')).toBe('true');
   expect(await page.getByRole('alert').innerText()).toBe('Սկզբնական արժեքը չպետք է գերազանցի վերջնական արժեքը');
-  expect(await columns().nth(1).getAttribute('aria-label')).toBe('2՝ 600.6 AMD, 2 գործարք');
-  await input('amount', 'max').fill('250'); expect(await columns().nth(1).getAttribute('aria-label')).toBe('2՝ 200.2 AMD, 1 գործարք');
-  await months().click(); await reloadReport();
+  await expectTotals(4);
+  await input('amount', 'max').fill('250'); await expectTotals(2, '300,3 ֏'); await reloadReport();
   expect(await input('area', 'min').inputValue()).toBe('90'); expect(await input('area', 'min').getAttribute('aria-invalid')).toBe('true');
-  expect(await columns().nth(5).getAttribute('aria-label')).toBe('Հունիս՝ 200.2 AMD, 1 գործարք');
-  await input('area', 'max').fill('100'); expect(await page.getByRole('alert').count()).toBe(0);
-  expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  await clearRanges(); await rooms().click(); await input('amount', 'max').fill('200.2');
+  await expectTotals(2, '300,3 ֏');
+  await input('area', 'max').fill('100'); expect(await page.getByRole('alert').count()).toBe(0); await expectTotals(0);
+  await clearRanges(); await input('amount', 'max').fill('200.2');
   for (const value of ['-1', 'abc', '65,']) {
-    await input('amount', 'max').fill(value);
-    expect(await input('amount', 'max').getAttribute('aria-invalid')).toBe('true');
-    expect(await columns().nth(1).getAttribute('aria-label')).toBe('2՝ 200.2 AMD, 1 գործարք');
+    await input('amount', 'max').fill(value); expect(await input('amount', 'max').getAttribute('aria-invalid')).toBe('true');
+    await expectTotals(2, '300,3 ֏');
   }
   await input('amount', 'max').fill('400.4'); expect(await page.getByRole('alert').count()).toBe(0);
   await input('date', 'min').fill('2026-01-01'); await input('date', 'max').fill('2025-12-31');
-  expect(await input('date', 'max').getAttribute('aria-invalid')).toBe('true');
-  expect(await columns().last().getAttribute('aria-label')).toBe('3՝ 0 AMD, 0 գործարք');
-  // Incomplete native date editing has an empty value but badInput=true; it must not clear the bound.
+  expect(await input('date', 'max').getAttribute('aria-invalid')).toBe('true'); await expectTotals(3);
   await input('date', 'max').fill(''); await input('date', 'min').focus();
   await input('date', 'min').press('ArrowRight'); await input('date', 'min').press('Backspace');
-  expect(await input('date', 'min').evaluate((el) => el.validity.badInput)).toBe(true);
-  expect(await input('date', 'min').getAttribute('aria-invalid')).toBe('true');
-  expect(await columns().last().getAttribute('aria-label')).toBe('3՝ 0 AMD, 0 գործարք');
-  await reloadReport();
-  expect(await input('date', 'min').evaluate((el) => el.validity.badInput)).toBe(true);
-  expect(await input('date', 'min').getAttribute('aria-invalid')).toBe('true');
-  expect(await columns().last().getAttribute('aria-label')).toBe('3՝ 0 AMD, 0 գործարք');
+  expect(await input('date', 'min').evaluate(el => el.validity.badInput)).toBe(true);
+  expect(await input('date', 'min').getAttribute('aria-invalid')).toBe('true'); await expectTotals(3);
+  await reloadReport(); expect(await input('date', 'min').evaluate(el => el.validity.badInput)).toBe(true); await expectTotals(3);
   await input('date', 'min').fill('2026-01-01'); await clearRanges(); expect(await page.getByRole('alert').count()).toBe(0);
-  expect(await input('date', 'min').evaluate((el) => el.validity.badInput)).toBe(false);
+  expect(await input('date', 'min').evaluate(el => el.validity.badInput)).toBe(false);
 });
 
 test('room gaps, growth/shrink/empty reconciliation and page reload', async () => {
@@ -640,9 +439,7 @@ test('room gaps, growth/shrink/empty reconciliation and page reload', async () =
   expect(await input('area', 'min').isEnabled()).toBe(true);
   fixture.state.items = [deal(1, { ufCrmRooms: 1 }), deal(2, { ufCrmRooms: 3 })]; await reloadReport();
   expect(await selected()).toEqual([]); expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true'); await room(2).click();
-  expect(await labels()).toEqual(['2՝ 0 AMD, 0 գործարք']); expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
-  expect(await page.getByTestId('total-count').innerText()).toBe('Գործարքների քանակ՝ 0');
-  expect((await page.getByTestId('y-tick').allTextContents()).map((t) => t.trim())).toEqual(['0', '0,25', '0,5', '0,75', '1']);
+  await expectTotals(0); expect(await emptyStatus().isVisible()).toBe(true);
   await input('area', 'min').fill('90'); await page.reload(); await ready();
   expect(await selected()).toEqual([]); expect(await allRoomsButton().getAttribute('aria-pressed')).toBe('true'); expect(await input('area', 'min').inputValue()).toBe('');
 });
@@ -674,11 +471,11 @@ test.each([1440, 375])('filter panel shows only a centered notice on load/failur
   expect(await notice.count()).toBe(0);
   fixture.state.items = Array.from({ length: 51 }, (_, i) => deal(i + 1, { opportunity: '300' })); fixture.state.failPage = 50;
   fixture.state.gate = new Promise((resolve) => { release = resolve; });
-  await refresh().click(); await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
+  await refresh().click(); await loadingStatus().waitFor();
   await onlyNotice();
-  expect(await columns().count()).toBe(0);
+  expect(await page.getByTestId('statistics-count').count()).toBe(0);
   await page.screenshot({ path: `test-results/filters-loading-${width}.png`, fullPage: true });
-  release(); fixture.state.gate = null; await page.getByRole('alert').waitFor();
+  release(); fixture.state.gate = null; await failedStatus().waitFor();
   await onlyNotice();
   await page.screenshot({ path: `test-results/filters-unavailable-${width}.png`, fullPage: true });
   fixture.state.failPage = undefined; await reloadReport(); expect(await input('amount', 'min').inputValue()).toBe('200.2');
@@ -687,23 +484,21 @@ test.each([1440, 375])('filter panel shows only a centered notice on load/failur
   expect(await panel.getByRole('alert').isVisible()).toBe(true);
   expect(await panel.getByRole('group').count()).toBe(5);
   expect(await notice.count()).toBe(0);
-  expect(await columns().last().getAttribute('aria-label')).toBe('2՝ 15 300 AMD, 51 գործարք');
+  await expectTotals(51, '15,3 հազ. ֏');
   for (const items of [[], [deal(1, { ufCrmProperty: '72' })], [deal(1, { ufCrmArea: null })]]) {
     fixture.state.items = items; await reloadReport(); expect(await page.locator('.room-buttons button[aria-label]').count()).toBe(0);
     expect(await input('area', 'min').isEnabled()).toBe(true);
     expect(await notice.count()).toBe(0);
-    expect(await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալներ չկան' }).isVisible()).toBe(true);
+    expect(await emptyStatus().isVisible()).toBe(true);
   }
-  expect(await problems().innerText()).toMatch(/1/);
 });
 
-test.each([1440, 375])('filters precede grouping with reset and without panel scroll and retain keyboard access at %i px', async (width) => {
+test.each([1440, 375])('filters precede KPIs with reset and without panel scroll and retain keyboard access at %i px', async (width) => {
   await page.setViewportSize({ width, height: 1000 }); await baseFilters();
   const panel = page.getByRole('form', { name: 'Զտիչներ', exact: true });
   const panelScroll = page.getByLabel('Զտիչների տարածք', { exact: true });
-  const graphScroll = page.getByLabel('Գծապատկերի տարածք', { exact: true });
   const panelBox = await panel.boundingBox();
-  const groupBox = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
+  const groupBox = await page.getByTestId('kpi-container').boundingBox();
   expect(panelBox.y + panelBox.height).toBeLessThan(groupBox.y);
   expect(await page.getByRole('button', { name: 'Վերականգնել', exact: true }).count()).toBe(1);
   const boxes = await panel.locator('fieldset').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y }; }));
@@ -714,10 +509,8 @@ test.each([1440, 375])('filters precede grouping with reset and without panel sc
   expect(await panelScroll.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
   const refreshBox = await refresh().boundingBox();
   await panelScroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
-  expect(await graphScroll.evaluate((el) => el.scrollLeft)).toBe(0);
   const panelPosition = await panelScroll.evaluate((el) => el.scrollLeft);
   expect(panelPosition).toBe(0);
-  await graphScroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
   expect(await panelScroll.evaluate((el) => el.scrollLeft)).toBe(panelPosition);
   expect(await refresh().boundingBox()).toEqual(refreshBox);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -757,193 +550,24 @@ test.each([1440, 375])('filters precede grouping with reset and without panel sc
     }
   }
   await page.keyboard.press('Tab');
-  expect(await rooms().evaluate((el) => el === document.activeElement)).toBe(true);
-  await page.keyboard.press('Tab');
-  expect(await months().evaluate((el) => el === document.activeElement)).toBe(true);
-  await page.keyboard.press('Tab');
-  expect(await refresh().evaluate((el) => el === document.activeElement)).toBe(true);
+  // The header refresh precedes the filters in keyboard order.
+  await refresh().focus(); await page.keyboard.press('Tab');
+  expect(await page.getByRole('button', { name: 'Վերականգնել', exact: true }).evaluate(el => el === document.activeElement)).toBe(true);
 });
 
-const timestamp = () => page.locator('footer time');
-const total = () => page.getByTestId('total-count');
-const ticks = () => page.getByTestId('y-tick').allTextContents();
-const xTitle = () => page.locator('footer').getByText(/· Գործարքների քանակ · X$/);
-
-test('filtered total and rounded scale follow the active chart without changing the successful update time', async () => {
-  fixture.state.time = '2026-10-23T10:05:09Z';
-  await page.clock.setFixedTime(new Date('2030-01-01T00:00:00Z')); // browser clock must not determine snapshot time
-  await baseFilters();
-  expect(await total().innerText()).toBe('Գործարքների քանակ՝ 4');
-  expect(await timestamp().innerText()).toBe('23.10.2026 14:05:09');
-  expect((await ticks()).map((t) => t.trim())).toEqual(['0', '175', '350', '525', '700']);
-  await page.clock.setFixedTime(new Date('2026-10-23T11:00:00Z'));
-  await months().click();
-  expect(await total().innerText()).toBe('Գործարքների քանակ՝ 3');
-  await input('amount', 'min').fill('150'); await input('amount', 'max').fill('350');
-  expect(await total().innerText()).toBe('Գործարքների քանակ՝ 1');
-  expect((await ticks()).at(-1).trim()).toBe('300');
-  await rooms().click(); expect(await total().innerText()).toBe('Գործարքների քանակ՝ 2');
-  expect((await ticks()).at(-1).trim()).toBe('400');
-  expect(await timestamp().innerText()).toBe('23.10.2026 14:05:09');
-  expect(fixture.state.reads).toBe(1);
-  await clearRanges(); expect(await total().innerText()).toBe('Գործարքների քանակ՝ 4');
-  fixture.state.time = '2026-10-23T11:00:00Z';
-  await refresh().focus(); await refresh().press('Enter'); await ready();
-  expect(await timestamp().innerText()).toBe('23.10.2026 15:00:00');
-  expect(fixture.state.reads).toBe(2);
-});
-
-test('loading and failure hide footer, retry and successful empty response set fresh time and zero totals', async () => {
-  fixture.state.time = '2026-10-23T10:05:09Z';
-  await page.clock.setFixedTime(new Date('2030-01-01T00:00:00Z')); // browser clock must not determine snapshot time
-  fixture.state.gate = new Promise((resolve) => { release = resolve; });
-  await page.goto(url); await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
-  expect(await refresh().isDisabled()).toBe(true); expect(await timestamp().count()).toBe(0);
-  release(); fixture.state.gate = null; await ready();
-  fixture.state.failPage = 0;
-  await refresh().click(); await page.getByRole('alert').waitFor();
-  expect(await timestamp().count()).toBe(0); expect(await total().count()).toBe(0);
-  expect(await xTitle().count()).toBe(0); expect(await refresh().isEnabled()).toBe(true);
-  fixture.state.failPage = undefined; fixture.state.items = [];
-  fixture.state.time = '2026-10-23T12:00:00Z';
-  await reloadReport();
-  expect(await timestamp().innerText()).toBe('23.10.2026 16:00:00');
-  expect(await total().innerText()).toBe('Գործարքների քանակ՝ 0');
-  expect(await columns().count()).toBe(0);
-  await months().click();
-  expect(await columns().count()).toBe(12);
-  expect((await ticks()).map((t) => t.trim())).toEqual(['0', '0,25', '0,5', '0,75', '1']);
-  expect(await page.getByTestId('bar-amount').allTextContents()).toEqual(Array(12).fill('0 ֏'));
-  expect(await page.getByTestId('bar-count').allTextContents()).toEqual(Array(12).fill('0 գործարք'));
-});
-
-test.each([1440, 375])('new chart layout and long full labels remain readable at %i px in both modes', async (viewportWidth) => {
-  fixture.state.items = [
-    deal(1, { ufCrmRooms: 1, opportunity: '1234567890.123456', ufCrmDate: '2026-09-01' }),
-    deal(2, { ufCrmRooms: 2, opportunity: '8000000000', ufCrmDate: '2026-10-01' }),
-    deal(3, { ufCrmRooms: 3, opportunity: '7654321098.654321', ufCrmDate: '2026-11-01' }),
-    deal(4, { ufCrmDate: null }),
-  ];
-  await page.setViewportSize({ width: viewportWidth, height: 1100 });
-  await page.goto(url); await ready();
-  for (const [mode, axis] of [[rooms(), 'Սենյակների քանակ'], [months(), 'Կնքման ամսաթիվ']]) {
-    await mode.click();
-    expect(await mode.getAttribute('aria-pressed')).toBe('true');
-    expect(await mode.evaluate((el) => el.classList.contains('bg-white'))).toBe(true);
-    expect(await xTitle().innerText()).toBe(`${axis} · Գործարքների քանակ · X`);
-    expect(await page.getByText('Արժույթ՝ AMD', { exact: true }).count()).toBe(0);
-    expect(await page.getByText('Ամբողջ ժամանակահատվածը', { exact: true }).count()).toBe(0);
-    expect(await page.getByLabel('Գծապատկերի տարածք', { exact: true }).locator('svg').getByText(axis, { exact: true }).count()).toBe(0);
-    expect((await ticks()).map((t) => t.trim())).toEqual(['0', '2 մլրդ', '4 մլրդ', '6 մլրդ', '8 մլրդ']);
-    const section = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).boundingBox();
-    const group = await page.getByRole('group', { name: 'Խմբավորում' }).boundingBox();
-    const display = await page.getByText('Ցուցադրություն', { exact: true }).boundingBox();
-    const y = await page.getByRole('heading', { name: 'Y · Ընդհանուր արժեք (֏)', exact: true }).boundingBox();
-    const button = await refresh().boundingBox();
-    expect(button.width).toBeGreaterThan(button.height);
-    expect(await refresh().innerText()).toBe('Թարմացնել հաշվետվությունը');
-    expect(await refresh().evaluate((el) => getComputedStyle(el).fontSize)).toBe(
-      await page.getByRole('heading', { name: 'Y · Ընդհանուր արժեք (֏)', exact: true }).evaluate((el) => getComputedStyle(el).fontSize));
-    expect(button.y).toBeGreaterThan(group.y + group.height);
-    if (viewportWidth === 375) expect(button.y).toBeGreaterThanOrEqual(y.y + y.height);
-    else {
-      expect(button.x).toBeGreaterThan(y.x + y.width);
-      expect(y.y).toBeGreaterThanOrEqual(button.y);
-      expect(y.y + y.height).toBeLessThanOrEqual(button.y + button.height);
-    }
-    expect(display.y + display.height).toBeLessThan(group.y);
-    for (const b of [group, display]) expect(Math.abs(b.x + b.width / 2 - section.x - section.width / 2)).toBeLessThan(2);
-    const info = await total().boundingBox(); const x = await xTitle().boundingBox(); const problem = await problems().boundingBox();
-    const timeBox = await timestamp().boundingBox();
-    expect(Math.abs(timeBox.y - info.y)).toBeLessThan(1);
-    expect(info.x).toBeGreaterThan(timeBox.x + timeBox.width);
-    expect(await timestamp().locator('..').innerText()).toMatch(/Թարմացվել է՝ .+ · Գործարքների քանակ՝ 3/);
-    if (viewportWidth === 375) expect(x.y).toBeGreaterThanOrEqual(info.y + info.height);
-    else expect(x.x).toBeGreaterThan(info.x + info.width);
-    expect(problem.y).toBeGreaterThanOrEqual(x.y + x.height);
-    expect(Math.abs(problem.x + problem.width - x.x - x.width)).toBeLessThan(2);
-    // Inspect actual rendered text geometry, not estimates used by the implementation.
-    const geometry = await page.getByLabel('Գծապատկերի տարածք', { exact: true }).locator('svg').evaluate((svg) => {
-      const boxes = (selector) => [...svg.querySelectorAll(selector)].map((el) => {
-        const b = el.getBBox(); return { x: b.x, y: b.y, right: b.x + b.width, bottom: b.y + b.height };
-      });
-      return { width: svg.viewBox.baseVal.width, height: svg.viewBox.baseVal.height,
-        amounts: boxes('[data-testid="bar-amount"]'), names: boxes('[role="img"] text:nth-of-type(2)'), counts: boxes('[data-testid="bar-count"]'), bars: boxes('[role="img"] rect') };
-    });
-    for (const row of [geometry.amounts, geometry.names, geometry.counts]) {
-      for (const [i, box] of row.entries()) {
-        expect(box.x).toBeGreaterThanOrEqual(100); expect(box.right).toBeLessThanOrEqual(geometry.width);
-        expect(box.y).toBeGreaterThanOrEqual(0); expect(box.bottom).toBeLessThanOrEqual(geometry.height);
-        if (i) expect(box.x).toBeGreaterThan(row[i - 1].right);
-      }
-    }
-    geometry.amounts.forEach((amount, i) => expect(amount.bottom).toBeLessThan(geometry.bars[i].y));
-    geometry.names.forEach((name, i) => expect(name.bottom).toBeLessThan(geometry.counts[i].y));
-    const barStyles = await columns().locator('rect').evaluateAll((elements) => elements.map((el) => ({
-      width: el.getBoundingClientRect().width, color: getComputedStyle(el).fill,
-    })));
-    for (const bar of barStyles) {
-      expect(bar.width).toBeCloseTo(56, 1);
-      expect(bar.color).toBe('rgb(102, 133, 235)');
-    }
-    expect(await page.getByTestId('bar-amount').evaluateAll((elements) => elements.every((el) => getComputedStyle(el).fill === 'rgb(102, 133, 235)'))).toBe(true);
-    expect(await page.getByTestId('bar-count').allTextContents()).toEqual(axis === 'Սենյակների քանակ'
-      ? Array(3).fill('1 գործարք') : [...Array(8).fill('0 գործարք'), ...Array(3).fill('1 գործարք'), '0 գործարք']);
-    const grid = await page.getByTestId('y-tick').locator('line').evaluateAll((elements) => elements.map((el) => ({
-      x: el.x1.baseVal.value, endX: el.x2.baseVal.value, y: el.y1.baseVal.value, endY: el.y2.baseVal.value, dash: getComputedStyle(el).strokeDasharray,
-    })));
-    expect(grid[0].dash).toBe('none');
-    expect(grid.slice(1).every((line) => line.dash === '4px, 4px')).toBe(true);
-    expect(grid[0].endX).toBe(geometry.width - 20);
-    expect(grid.every((line) => line.endX === grid[0].endX && line.y === line.endY)).toBe(true);
-    const axisLine = await page.getByTestId('y-axis').evaluate((el) => ({
-      x1: el.x1.baseVal.value, x2: el.x2.baseVal.value, y1: el.y1.baseVal.value, y2: el.y2.baseVal.value,
-    }));
-    expect(axisLine).toEqual({ x1: grid[0].x, x2: grid[4].x, y1: grid[0].y, y2: grid[4].y });
-    const scroll = page.getByLabel('Գծապատկերի տարածք');
-    const footerBefore = await xTitle().boundingBox();
-    await scroll.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
-    expect(await refresh().boundingBox()).toEqual(button);
-    expect(await xTitle().boundingBox()).toEqual(footerBefore);
-    const last = await columns().last().getByTestId('bar-amount').boundingBox(); const scrollBox = await scroll.boundingBox();
-    expect(last.x).toBeGreaterThanOrEqual(scrollBox.x); expect(last.x + last.width).toBeLessThanOrEqual(scrollBox.x + scrollBox.width);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    fs.mkdirSync('test-results', { recursive: true });
-    await page.screenshot({ path: `test-results/chart-${axis === 'Սենյակների քանակ' ? 'rooms' : 'months'}-${viewportWidth}-end.png`, fullPage: true, animations: 'disabled' });
-    await scroll.evaluate((el) => { el.scrollLeft = 0; });
-    await page.screenshot({ path: `test-results/chart-${axis === 'Սենյակների քանակ' ? 'rooms' : 'months'}-${viewportWidth}.png`, fullPage: true, animations: 'disabled' });
-  }
-  await period().selectOption('custom');
-  await input('date', 'min').fill('2026-01-01');
-  expect(await filterPanel().getByText('2026', { exact: true }).count()).toBe(0);
-  expect(await page.getByText(/Սկսած 2026-01-01/).count()).toBe(0);
-  await problems().click(); await page.getByRole('dialog').waitFor(); await page.keyboard.press('Escape');
-  fixture.state.items.pop(); await reloadReport();
-  expect(await problems().count()).toBe(0); expect(await xTitle().isVisible()).toBe(true);
-});
-
-
-test('page reload and a second tab use cached data and server time, manual refresh gets fresh deals', async () => {
-  fixture.state.items = [deal(1)];
-  await page.goto(url); await ready();
-  const time = await timestamp().getAttribute('datetime');
+test('reload and a second tab use cached data, while header refresh gets fresh deals', async () => {
+  fixture.state.items = [deal(1)]; await page.goto(url); await ready(); await expectTotals(1, '10 ֏');
   const count = fixture.state.httpRequests.length;
-  fixture.state.time = '2026-06-01T10:01:00Z';
   fixture.state.items[0].opportunity = '90';
-  await page.reload(); await ready();
-  expect(fixture.state.httpRequests).toHaveLength(count);
-  expect(await timestamp().getAttribute('datetime')).toBe(time);
-  expect(await page.getByRole('img', { name: '2՝ 10 AMD, 1 գործարք', exact: true }).count()).toBe(1);
+  await page.reload(); await ready(); expect(fixture.state.httpRequests).toHaveLength(count); await expectTotals(1, '10 ֏');
   const other = await page.context().newPage();
   try {
-    await other.goto(url); await other.locator('footer time').waitFor();
-    expect(await other.locator('footer time').getAttribute('datetime')).toBe(time);
+    await other.goto(url); await other.getByTestId('statistics-count').waitFor();
+    expect(await other.getByTestId('statistics-amount').innerText()).toBe('10 ֏');
     expect(fixture.state.httpRequests).toHaveLength(count);
   } finally { await other.close(); }
-  await reloadReport();
-  expect(await page.getByRole('img', { name: '2՝ 90 AMD, 1 գործարք', exact: true }).count()).toBe(1);
-  expect(await timestamp().getAttribute('datetime')).toBe('2026-06-01T10:01:00.000Z');
-  expect(fixture.state.requests.filter((r) => r.method !== 'crm.item.list')).toHaveLength(3);
+  await reloadReport(); await expectTotals(1, '90 ֏');
+  expect(fixture.state.requests.filter(r => r.method !== 'crm.item.list')).toHaveLength(3);
 });
 
 test('automatic retries keep loading, recover on third retry and show no data after exhaustion', async () => {
@@ -962,9 +586,9 @@ test('automatic retries keep loading, recover on third retry and show no data af
   fixture.state.commandFailures = 3;
   starts.length = 0;
   await refresh().click();
-  await page.getByRole('status', { name: 'Գծապատկերի վիճակ' }).filter({ hasText: 'Տվյալները բեռնվում են…' }).waitFor();
+  await loadingStatus().waitFor();
   expect(await refresh().isDisabled()).toBe(true);
-  expect(await timestamp().count()).toBe(0);
+  expect(await page.getByTestId('statistics-count').count()).toBe(0);
   expect(await page.getByRole('alert').count()).toBe(0);
   await ready();
   expect(starts).toHaveLength(4);
@@ -972,12 +596,12 @@ test('automatic retries keep loading, recover on third retry and show no data af
   fixture.state.commandFailures = 4;
   starts.length = 0;
   await refresh().click();
-  await page.getByRole('alert').waitFor();
+  await failedStatus().waitFor();
   expect(starts).toHaveLength(4);
-  expect(await columns().count()).toBe(0);
-  expect(await timestamp().count()).toBe(0);
+  expect(await page.locator('.statistics-pie svg').count()).toBe(0);
+  expect(await page.getByTestId('statistics-count').count()).toBe(0);
   expect(await refresh().isEnabled()).toBe(true);
   fixture.state.items[0].opportunity = '99';
   await reloadReport();
-  expect(await page.getByRole('img', { name: '2՝ 99 AMD, 1 գործարք', exact: true }).count()).toBe(1);
+  await expectTotals(1, '99 ֏');
 });
