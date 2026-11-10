@@ -85,7 +85,7 @@ test('failure on last CRM page returns only a safe 502 error, never a partial re
 });
 test('configuration failure returns safe 500 before calling CRM', async () => {
   const fetchImpl = jest.fn();
-  await start({ env: { BITRIX24_WEBHOOK_URL: `${WEBHOOK}?bad=1` }, fetchImpl });
+  await start({ env: { BITRIX24_WEBHOOK_URL: `${WEBHOOK}?bad=1` }, auth: null, fetchImpl });
   const response = await fetch(`${base}/api/report`);
   expect(response.status).toBe(500); expect(await response.json()).toEqual({ error: 'CONFIGURATION_ERROR' });
   expect(fetchImpl).not.toHaveBeenCalled();

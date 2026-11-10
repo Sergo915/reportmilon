@@ -75,8 +75,9 @@ function createFixture(state = {}) {
     }
     throw new Error('Unexpected CRM method');
   }
+  // auth: null держит тесты отчёта независимыми от локальной настройки входа.
   return { state, fetchImpl, scheduleRequest: (task) => task(), waitRetry: async () => { state.retryWaits = (state.retryWaits || 0) + 1; },
-    env: { BITRIX24_WEBHOOK_URL: WEBHOOK }, now: () => new Date(state.time || '2026-06-01T10:00:00Z') };
+    env: { BITRIX24_WEBHOOK_URL: WEBHOOK }, auth: null, now: () => new Date(state.time || '2026-06-01T10:00:00Z') };
 }
 module.exports = { createFixture, deal, sampleItems, fields, WEBHOOK };
 

@@ -15,6 +15,9 @@ import milonLogo from '../../images/logo_milon.png';
 const { periods, quickPeriods, quickSelection, calendarContext, defaultSelection, initialSelections, reconcileSelections, togglePeriodValue, periodRanges } = calendar;
 const { formatAmountInput, ungroupAmount } = amountInput;
 const { roomOptions, reconcileRooms, toggleRoom, validateRange } = filters;
+// Пустой account означает, что авторизация не настроена: кнопки выхода нет.
+defineProps({ account: { type: String, default: '' } });
+const emit = defineEmits(['logout', 'expired']);
 const report = ref(null), loading = ref(false), failed = ref(false);
 const kpiDialog = ref(null);
 const filterContainer = ref(null), wideKpi = ref(false);
@@ -152,6 +155,8 @@ async function refresh(force = true) {
   monthPicker.value?.close(); kpiDialog.value?.close(); report.value = null; failed.value = false; loading.value = true;
   try {
     const response = await fetch(force ? '/api/report?refresh=1' : '/api/report', { cache: 'no-store' });
+    // Истёкшая сессия возвращает форму входа, а не ошибку отчёта.
+    if (response.status === 401) { emit('expired'); return; }
     if (!response.ok) throw new Error();
     const snapshot = await response.json();
     const available = roomOptions(snapshot.deals);
@@ -176,8 +181,12 @@ onMounted(() => refresh(false));
             <p class="report-header-label">Հաշվետվություններ</p>
             <h1>Կնքված բնակարանների հաշվետվություն</h1>
           </div>
-          <button type="button" class="refresh-button"
-            :disabled="loading" @click="refresh">Թարմացնել հաշվետվությունը</button>
+          <div class="report-header-actions">
+            <button v-if="account" type="button" class="logout-button" :title="account"
+              @click="emit('logout')">Ելք</button>
+            <button type="button" class="refresh-button"
+              :disabled="loading" @click="refresh">Թարմացնել հաշվետվությունը</button>
+          </div>
         </div>
         <hr data-testid="header-divider" aria-hidden="true">
       </header>

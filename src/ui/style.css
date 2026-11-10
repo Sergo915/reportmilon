@@ -81,7 +81,10 @@ dialog::backdrop { background: rgb(15 23 42 / 45%); }
 .report-header:not(.header-wide) .report-header-label { grid-column: 2; grid-row: 1; align-self: start; font-size: clamp(11px, 3vw, 15px); }
 .report-header:not(.header-wide) h1 { grid-column: 1 / -1; grid-row: 2; margin-top: 0; }
 .report-header:not(.header-wide) .report-header-copy p, .report-header:not(.header-wide) .report-header-copy h1 { padding-inline: 0; }
-.report-header:not(.header-wide) .refresh-button { grid-column: 1 / -1; grid-row: 3; }
+.report-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; max-width: 100%; }
+.logout-button { min-height: 40px; padding: 8px 12px; border: 1px solid #e2e8f0; background: white; font-size: 14px; line-height: 20px; font-weight: 500; white-space: nowrap; }
+.logout-button:hover { background: #f8fafc; }
+.report-header:not(.header-wide) .report-header-actions { grid-column: 1 / -1; grid-row: 3; }
 
 .filter-container { container: filter-layout / inline-size; margin: 12px; }
 /* Filters reflow within their panel without horizontal scrolling. */
