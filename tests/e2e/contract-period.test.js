@@ -53,7 +53,7 @@ test('nonadjacent months, last selection and year boundaries filter immediately 
   await page.getByLabel('Մակերես (մ²)՝ Սկսած', { exact: true }).fill(''); await count(2);
   await page.getByLabel('Բնակարանի արժեք (֏)՝ Մինչև', { exact: true }).fill('20'); await count(1);
   await page.getByLabel('Բնակարանի արժեք (֏)՝ Մինչև', { exact: true }).fill('');
-  await button('Կնքման ամսաթիվ').click(); await count(0); expect(await page.locator('svg [role="img"]').count()).toBe(12);
+  await button('Կնքման ամսաթիվ').click(); await count(0); expect(await page.locator('svg .chart-column[role="img"]').count()).toBe(12);
   await button('Սենյակների քանակ').click(); await count(2);
   expect(await page.getByRole('button', { name: /^Խնդրահարույց գործարքներ/ }).innerText()).toMatch(/1/);
   expect(requests).toBe(1); expect(fixture.state.reads).toBe(1);
@@ -205,7 +205,8 @@ test.each([375])('quarter layout aligns headings, equal complexes and room rows 
   const near = (a, b) => expect(Math.abs(a - b)).toBeLessThan(1);
   expect(await numeric.allTextContents()).toEqual(['1', '2', '3', '4', '5']);
   near(tower.width, hills.width); near(tower.height, hills.height); near(tower.x, hills.x);
-  near(hills.y + hills.height - tower.y, quarterBox.y + quarterBox.height - periodBox.y);
+  near(tower.height, periodBox.height); near(hills.height, periodBox.height);
+  near(hills.y - tower.y - tower.height, 8);
   for (const b of boxes.slice(0, 3)) { near(b.y, boxes[0].y); near(b.width, boxes[0].width); }
   near(boxes[3].y, boxes[4].y); near(boxes[3].width, boxes[4].width);
   for (const b of boxes) near(b.height, all.height);

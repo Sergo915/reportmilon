@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import filters from '../report/filter.cjs';
 import chart from '../report/chart.cjs';
 import calendar from '../report/period.cjs';
@@ -7,6 +7,7 @@ import amountInput from '../report/amount-input.cjs';
 import RangeInputs from './RangeInputs.vue';
 import MonthPicker from './MonthPicker.vue';
 import KpiCard from './KpiCard.vue';
+import StatisticsPanel from './StatisticsPanel.vue';
 import KpiDealsDialog from './KpiDealsDialog.vue';
 import kpi from '../report/kpi.cjs';
 import filterIcon from '../../images/filter.png';
@@ -20,10 +21,29 @@ const updatedAt = ref(null), dialog = ref(null), problemButton = ref(null);
 const kpiDialog = ref(null);
 const filterContainer = ref(null), wideKpi = ref(false);
 let kpiObserver;
-onMounted(() => {
-  kpiObserver = new ResizeObserver(() => {
+function layoutPanels() {
+    if (!filterContainer.value) return;
     wideKpi.value = filterContainer.value.clientWidth >= 1100;
-  });
+    const row = filterContainer.value.querySelector('.report-top-panels');
+    const form = row.querySelector('form');
+    row.style.setProperty('--reset-width', `${form.querySelector('.filter-heading button').getBoundingClientRect().width || 130}px`);
+    row.classList.toggle('panels-stacked', !wideKpi.value);
+    row.classList.add('panels-joined');
+    const title = form.querySelector('.filter-heading h2');
+    const legend = form.querySelector('legend');
+    if (title && legend && !disabled.value) {
+      const heading = row.querySelector('.statistics-heading');
+      const statTitle = heading.querySelector('h2');
+      const desired = statTitle.getBoundingClientRect().bottom + legend.getBoundingClientRect().top - title.getBoundingClientRect().bottom;
+      row.style.setProperty('--statistics-content-gap', `${Math.max(0, desired - heading.getBoundingClientRect().bottom)}px`);
+      const amountMax = form.querySelector('#amount-max');
+      if (!row.classList.contains('panels-stacked') && amountMax) {
+        row.style.setProperty('--statistics-content-height', `${Math.max(100, amountMax.getBoundingClientRect().bottom - desired)}px`);
+      } else row.style.removeProperty('--statistics-content-height');
+    }
+}
+onMounted(() => {
+  kpiObserver = new ResizeObserver(layoutPanels);
   kpiObserver.observe(filterContainer.value);
 });
 onBeforeUnmount(() => kpiObserver?.disconnect());
@@ -37,6 +57,7 @@ const quarterRoomRows = computed(() => Array.from({ length: Math.ceil(availableR
 const emptyRange = () => ({ draft: { min: '', max: '' }, applied: { min: null, max: null }, errors: {}, badInput: {} });
 const ranges = reactive(Object.fromEntries(['amount', 'area', 'date'].map((kind) => [kind, emptyRange()])));
 const selectedPeriod = ref('year'), dateRevision = ref(0);
+watch([availableRooms, selectedPeriod, loading, wideKpi], async () => { await nextTick(); layoutPanels(); });
 const selectedQuick = ref('current-month'), monthPicker = ref(null);
 const hasFilterErrors = computed(() => ['area', 'amount', ...(selectedPeriod.value === 'custom' ? ['date'] : [])]
   .some(kind => Object.keys(ranges[kind].errors).length));
@@ -197,6 +218,7 @@ onMounted(() => refresh(false));
         <hr data-testid="header-divider" aria-hidden="true">
       </header>
       <div ref="filterContainer" class="filter-container">
+      <div class="report-top-panels" :class="{ 'top-wide': wideKpi }">
       <form class="filter-panel" :class="{ 'filter-panel-unavailable': disabled, 'filter-panel-with-errors': hasFilterErrors, 'stacked-filters': stackedFilters, 'month-filter': selectedPeriod === 'month', 'quarter-filter': selectedPeriod === 'quarter' }" aria-label="Զտիչներ" @submit.prevent>
         <p v-if="disabled" class="filter-notice" role="status">Հաշվետվությունների թարմացման պատճառով զտիչների կարգավորումը ժամանակավորապես անհասանելի է։</p>
         <div v-show="!disabled" aria-label="Զտիչների տարածք">
@@ -205,7 +227,7 @@ onMounted(() => refresh(false));
             <button type="button" :disabled="disabled" @click="resetFilters"><span class="filter-icon reset-icon" :style="{ maskImage: `url(${resetIcon})` }" aria-hidden="true"></span>Վերականգնել</button>
           </div>
           <div class="filter-row">
-            <div class="filter-first-row">
+            <div class="filter-first-row" :style="{ '--room-row-width': `${Math.max(156, availableRooms.length * 32 - 4)}px` }">
             <fieldset class="date-filter" :disabled="disabled">
               <legend>{{ filterFields.date }}</legend>
               <div class="period-select">
@@ -282,6 +304,8 @@ onMounted(() => refresh(false));
           </div>
         </div>
       </form>
+      <StatisticsPanel :deals="report?.deals || []" :filters="appliedFilters" :period="selectedPeriod" :loading="loading || (!report && !failed)" :failed="failed" :reset-revision="kpiResetRevision" />
+      </div>
       </div>
       <div class="kpi-container" :class="{ 'kpi-wide': wideKpi }" data-testid="kpi-container">
       <div class="kpi-grid">

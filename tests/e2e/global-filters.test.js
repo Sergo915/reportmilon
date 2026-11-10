@@ -103,7 +103,7 @@ test('every preset applies, custom values and invalid drafts survive preset swit
   expect(await input('date', 'max').inputValue()).toBe('2025-12-31');
   expect(await page.getByRole('alert').count()).toBe(1); await count(1);
   await page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true }).click();
-  await count(0); expect(await page.locator('svg [role="img"]').count()).toBe(12);
+  await count(0); expect(await page.locator('svg .chart-column[role="img"]').count()).toBe(12);
   await input('date', 'min').fill('2025-01-01');
   await input('date', 'max').fill(''); await count(3);
   await page.getByRole('button', { name: 'Սենյակների քանակ', exact: true }).click(); await count(4);
@@ -137,7 +137,7 @@ test.each([1440, 1920])('wide panel has two rows and retains geometry with custo
   const box = await panel.boundingBox();
   const sectionWidth = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).evaluate(el => el.clientWidth);
   expect(box.width).toBeLessThan((sectionWidth - 24) * .7);
-  expect(Math.abs(box.x + box.width / 2 - width / 2)).toBeLessThan(1);
+  expect(Math.abs((await page.locator('.report-top-panels').boundingBox()).x - (await page.getByTestId('kpi-container').boundingBox()).x)).toBeLessThan(1);
   const headings = await panel.locator('legend').allTextContents();
   expect(headings).toEqual(['Կնքման ժամանակահատված', 'Համալիր', 'Սենյակների քանակ', 'Մակերես (մ²)', 'Բնակարանի արժեք (֏)']);
   for (const value of ['year', 'custom']) {
@@ -148,8 +148,8 @@ test.each([1440, 1920])('wide panel has two rows and retains geometry with custo
     expect(boxes[3].y).toBeGreaterThan(Math.max(...boxes.slice(0, 3).map(b => b.bottom)));
     const selectBox = await period().boundingBox();
     const inset = selectBox.x - box.x;
-    for (const gap of [boxes[1].x - boxes[0].x - boxes[0].width, boxes[2].x - boxes[1].x - boxes[1].width,
-      box.x + box.width - boxes[2].x - boxes[2].width]) expect(Math.abs(gap - inset)).toBeLessThan(1);
+    for (const gap of [boxes[1].x - boxes[0].x - boxes[0].width, boxes[2].x - boxes[1].x - boxes[1].width]) expect(Math.abs(gap - 16)).toBeLessThan(1);
+    expect(boxes[2].x + boxes[2].width).toBeLessThanOrEqual(box.x + box.width - inset + 1);
     expect(Math.abs(boxes[3].width - boxes[0].width)).toBeLessThan(1);
     const title = await panel.getByRole('heading', { name: 'Զտիչներ' }).boundingBox();
     const button = await reset().boundingBox();

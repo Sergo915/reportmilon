@@ -487,7 +487,7 @@ test.each([1440, 1920])('desktop frame, legends, full tooltip and scrolling stay
   expect(baseline.x - section.x).toBeCloseTo(inset, 0);
   expect(section.x + section.width - baseline.x - baseline.width).toBeCloseTo(inset, 0);
   const shadow = await frame.evaluate(el => getComputedStyle(el).boxShadow);
-  expect(shadow).toBe(await page.getByRole('form', { name: 'Զտիչներ' }).evaluate(el => getComputedStyle(el).boxShadow));
+  expect(shadow).toBe(await page.locator('.report-top-panels').evaluate(el => getComputedStyle(el).boxShadow));
   expect(await page.getByTestId('kpi-dates').count()).toBe(0);
   for (const metric of ['count', 'amount']) {
     await value(metric).click();

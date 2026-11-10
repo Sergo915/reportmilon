@@ -6,7 +6,7 @@ const rooms = () => page.getByRole('button', { name: 'Սենյակների քա�
 const months = () => page.getByRole('button', { name: 'Կնքման ամսաթիվ', exact: true });
 const problems = () => page.getByRole('button', { name: /^Խնդրահարույց գործարքներ/ });
 const refresh = () => page.getByRole('button', { name: 'Թարմացնել հաշվետվությունը', exact: true });
-const columns = () => page.locator('svg [role="img"]');
+const columns = () => page.locator('svg .chart-column[role="img"]');
 const ready = async () => { await page.locator('footer time').waitFor(); };
 async function reloadReport() { await refresh().click(); await ready(); }
 beforeEach(async () => {
@@ -261,23 +261,24 @@ test.each([1440, 1920, 1024, 375, 320])('filter layout reflows without scrolling
       boxes.slice(1, 3).forEach(box => expectEqualPixels(box.y, boxes[0].y));
       expectEqualPixels(boxes[3].width, boxes[0].width);
       const sectionWidth = await page.getByRole('region', { name: 'Գործարքների հաշվետվություն' }).evaluate(el => el.clientWidth);
-      expect(panel.width).toBeLessThan((sectionWidth - 24) * .7);
+      if (await page.locator('.report-top-panels').evaluate(el=>el.classList.contains('panels-stacked'))) expectEqualPixels(panel.width, (await page.locator('.report-top-panels').boundingBox()).width - 2);
+      else expect(panel.width).toBeLessThan((sectionWidth - 24) * .7);
       const select = await filterPanel().locator('select').boundingBox();
       expectEqualPixels(select.x - panel.x, leftInset);
-      expectEqualPixels(boxes[1].x - boxes[0].right, leftInset);
-      expectEqualPixels(boxes[2].x - boxes[1].right, leftInset);
-      expectEqualPixels(panel.x + panel.width - boxes[2].right, leftInset);
+      expectEqualPixels(boxes[1].x - boxes[0].right, 16);
+      expectEqualPixels(boxes[2].x - boxes[1].right, 16);
+      expect(boxes[2].right).toBeLessThanOrEqual(panel.x + panel.width - leftInset + 1);
       const all = await allRoomsButton().boundingBox();
       const firstRoom = await room(1).boundingBox();
       expect(firstRoom.y).toBeGreaterThanOrEqual(all.y + all.height);
       expectEqualPixels(all.x + all.width / 2, boxes[2].x + boxes[2].width / 2);
-      expectEqualPixels(panel.x + panel.width / 2, width / 2);
+      expectEqualPixels((await page.locator('.report-top-panels').boundingBox()).x, (await page.getByTestId('kpi-container').boundingBox()).x);
     } else boxes.forEach((box) => expectEqualPixels(box.width, boxes[0].width));
     const rows = [...new Set(boxes.map((box) => box.y))];
     if (width < 1440) expect(rows).toHaveLength(width === 1024 ? 3 : 5);
     else expectEqualPixels(boxes[3].y - Math.max(...boxes.slice(0, 3).map(box => box.y + box.height)), 16);
     if (width >= 1440) {
-      for (const [a, b] of [[0, 1], [1, 2]]) expectEqualPixels(boxes[b].x - boxes[a].right, leftInset);
+      for (const [a, b] of [[0, 1], [1, 2]]) expectEqualPixels(boxes[b].x - boxes[a].right, 16);
       expectEqualPixels(boxes[4].x - boxes[3].right, 16);
     }
     for (let i = 1; width < 1440 && i < rows.length; i++) {
@@ -289,7 +290,10 @@ test.each([1440, 1920, 1024, 375, 320])('filter layout reflows without scrolling
     }));
     expect(buttons).toHaveLength(count);
     buttons.forEach((box) => { expect(box.width).toBe(28); expect(box.height).toBe(32); expect(box.fits).toBe(true); });
-    if (width >= 1440) expect(new Set(buttons.map(box => box.y)).size).toBe(1);
+    if (width >= 1440) {
+      const roomWidth=(await filterPanel().locator('.room-values').boundingBox()).width;
+      expect(new Set(buttons.map(box => box.y)).size).toBe(Math.ceil(count / Math.floor((roomWidth + 4) / 32)));
+    }
     else if (count === 12 && width < 640) expect(new Set(buttons.map(box => box.y)).size).toBeGreaterThan(1);
     const inputBoxes = await filterPanel().locator('input:visible').evaluateAll((els) => els.map((el) => {
       const box = el.getBoundingClientRect(); return { height: box.height, y: box.y };
@@ -333,7 +337,9 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
   const native = await page.context().newCDPSession(page);
   await native.send('DOM.enable'); await native.send('CSS.enable');
   const nativeDateOpacity = async (side) => {
-    const { root } = await native.send('DOM.getDocument', { depth: -1, pierce: true });
+    const { root } = await native.send('DOM.getDocument');
+    const { nodeId } = await native.send('DOM.querySelector', { nodeId: root.nodeId, selector: `#date-${side}` });
+    const { node: control } = await native.send('DOM.describeNode', { nodeId, depth: -1, pierce: true });
     const find = (node, predicate) => {
       if (predicate(node)) return node;
       for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) {
@@ -343,9 +349,9 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
     const attr = (node, key) => {
       const i = node.attributes?.indexOf(key); return i >= 0 ? node.attributes[i + 1] : undefined;
     };
-    const control = find(root, (node) => attr(node, 'id') === `date-${side}`);
     const editor = find(control, (node) => attr(node, 'pseudo') === '-webkit-datetime-edit');
-    const { computedStyle } = await native.send('CSS.getComputedStyleForNode', { nodeId: editor.nodeId });
+    const { nodeIds } = await native.send('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [editor.backendNodeId] });
+    const { computedStyle } = await native.send('CSS.getComputedStyleForNode', { nodeId: nodeIds[0] });
     return computedStyle.find(({ name }) => name === 'opacity').value;
   };
   const assertHint = async (kind, side, shown) => {
@@ -374,9 +380,9 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
       await input(kind, side).fill(''); await assertHint(kind, side, true);
     }
     await input(kind, 'min').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `test-results/filters-hints-${width}-${kind}-empty.png`, fullPage: true, animations: 'disabled' });
+    await filterPanel().screenshot({ path: `test-results/filters-hints-${width}-${kind}-empty.png`, animations: 'disabled' });
     await input(kind, 'min').fill(values[0]); await input(kind, 'max').fill(values[1]);
-    await page.screenshot({ path: `test-results/filters-hints-${width}-${kind}-filled.png`, fullPage: true, animations: 'disabled' });
+    await filterPanel().screenshot({ path: `test-results/filters-hints-${width}-${kind}-filled.png`, animations: 'disabled' });
   }
   await clearRanges();
   // Typing into a blank native date must reveal the actual edited segments.
@@ -390,7 +396,7 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
   expect(await input('date', 'min').getAttribute('aria-invalid')).toBe('true');
   await assertHint('date', 'min', false); expect(await labels()).toEqual(applied);
   await input('date', 'max').focus(); await assertHint('date', 'min', false);
-  await page.screenshot({ path: `test-results/filters-hints-${width}-date-partial.png`, fullPage: true, animations: 'disabled' });
+  await filterPanel().screenshot({ path: `test-results/filters-hints-${width}-date-partial.png`, animations: 'disabled' });
   await input('date', 'min').fill(''); await assertHint('date', 'min', true);
   expect(await page.getByRole('alert').count()).toBe(0);
   const before = (await filterGeometry()).map(({ x, width, titleCenter }) => ({ x, width, titleCenter }));
@@ -407,7 +413,7 @@ test.each([1440, 375])('filter hints stay inside empty controls and preserve par
   await input('amount', 'max').fill('400'); await clearRanges();
   expect(await page.getByRole('alert').count()).toBe(0);
   await native.detach();
-// Six full-page screenshots and repeated native-shadow DOM inspections exceed 30 s on narrow Chromium.
+// Inspect only the date control shadow tree and capture the filter panel itself.
 }, 60000);
 
 test('room buttons retain their size and distinguish selected and unselected colors', async () => {
@@ -523,6 +529,9 @@ test('filters intersect instantly, keep global problems, preserve mode and never
   const modal = page.getByRole('dialog'); expect(await modal.getByRole('link').allTextContents()).toEqual(['5', '6', '7', '8']);
   expect(await modal.innerText()).toContain('Մակերես (մ²)՝ Լրացված չէ');
   expect(await modal.innerText()).not.toContain('500'); await page.keyboard.press('Escape');
+  await modal.waitFor({ state: 'hidden' });
+  // Native close restores focus asynchronously; complete that handoff before typing.
+  await page.waitForFunction(() => document.activeElement?.textContent.includes('Խնդրահարույց գործարքներ'));
   await clearRanges(); await allRoomsButton().click(); expect(await months().getAttribute('aria-pressed')).toBe('true');
   expect(await input('amount', 'min').inputValue()).toBe('');
   expect(await room(1).getAttribute('aria-pressed')).toBe('false');
@@ -731,7 +740,12 @@ test.each([1440, 375])('filters precede grouping with reset and without panel sc
   await page.keyboard.press('Enter');
   expect(await input('date', 'min').inputValue()).toBe('2026-06-16');
   await input('amount', 'max').focus();
-  // The newly interactive KPI block sits between filters and chart grouping.
+  // Statistics follows the filters and precedes the existing KPI block.
+  const statStops = page.locator('.statistics-trigger, .statistics-body [tabindex="0"]');
+  for (let index = 0; index < await statStops.count(); index++) {
+    await page.keyboard.press('Tab');
+    expect(await statStops.nth(index).evaluate(el => el === document.activeElement)).toBe(true);
+  }
   for (const metric of ['count', 'amount']) {
     if (width < 1124 || metric === 'amount') await page.keyboard.press('Tab');
     const card = page.getByTestId(`kpi-${metric}`);

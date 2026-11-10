@@ -50,7 +50,7 @@ describe('home page', () => {
     expect(filters.y).toBeGreaterThan(divider.y + divider.height);
     expect(section).toMatchObject({ x: 32, y: 0, width: 1376 });
     expect(filters.width).toBeLessThan(1350 * .7);
-    expect(filters.x + filters.width / 2).toBeCloseTo(720, 0);
+    expect((await page.locator('.report-top-panels').boundingBox()).x).toBeCloseTo((await page.getByTestId('kpi-container').boundingBox()).x, 0);
     expect(await region.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
     fs.mkdirSync('test-results', { recursive: true });
     await page.screenshot({ path: 'test-results/header-1440.png', fullPage: true, animations: 'disabled' });

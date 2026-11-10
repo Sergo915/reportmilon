@@ -17,7 +17,8 @@ afterEach(async () => { release?.(); server.closeAllConnections(); await new Pro
 test.each([1440, 1920])('wide panel preserves the year dimensions through period changes at %i', async width => {
   await page.setViewportSize({ width, height: 1200 }); await page.goto(url); await ready();
   const reference = await panel().boundingBox();
-  near(reference.width, 563.96875); near(reference.height, 258);
+  const stacked = await page.locator('.report-top-panels').evaluate(el=>el.classList.contains('panels-stacked'));
+  near(reference.width, ((await page.locator('.report-top-panels').boundingBox()).width - 2) / (stacked ? 1 : 2)); near(reference.height, 258);
   await page.screenshot({ path: `test-results/filter-panel-current-${width}.png`, fullPage: true });
   for (const value of ['month', 'quarter', 'year', 'custom']) {
     await period().selectOption(value);
@@ -130,17 +131,21 @@ test.each([375, 768, 1024, 1440])('month popup supports hover, keyboard and mult
   await page.keyboard.press('Escape'); await page.keyboard.press('Space'); await popup.waitFor();
   await page.getByRole('heading', { level: 1 }).click(); expect(await popup.isVisible()).toBe(false);
   await trigger.hover(); await popup.waitFor(); await page.mouse.move(0, 0); expect(await popup.isVisible()).toBe(false);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test.each([375, 768, 1024, 1189, 1190, 1440])('resizing retains the existing adaptive breakpoints at viewport %i', async width => {
   await page.setViewportSize({ width: 1440, height: 1200 }); await page.goto(url); await ready();
   await page.setViewportSize({ width, height: 1200 });
+  // ResizeObserver and Vue update the joined layout after the viewport changes.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const outer = await page.locator('.filter-container').boundingBox();
   const boxes = await panel().locator('fieldset').evaluateAll(els => els.map(el => { const b = el.getBoundingClientRect(); return { x: b.x, y: b.y }; }));
   if (outer.width >= 1100) {
-    near((await panel().boundingBox()).height, 258); near(boxes[0].y, boxes[1].y); near(boxes[0].y, boxes[2].y);
-  } else if (outer.width - 2 >= 640) {
+    if (!(await page.locator('.report-top-panels').evaluate(el=>el.classList.contains('panels-stacked')))) expect((await panel().boundingBox()).height).toBeGreaterThanOrEqual(258);
+    else expect(await panel().evaluate(el=>el.scrollHeight<=el.clientHeight)).toBe(true);
+    near(boxes[0].y, boxes[1].y); near(boxes[0].y, boxes[2].y);
+  } else if ((await panel().boundingBox()).width - 2 >= 640) {
     near(boxes[0].y, boxes[1].y); near(boxes[2].y, boxes[3].y); expect(boxes[2].y).toBeGreaterThan(boxes[0].y);
   } else {
     boxes.forEach(box => near(box.x, boxes[0].x));
@@ -148,10 +153,10 @@ test.each([375, 768, 1024, 1189, 1190, 1440])('resizing retains the existing ada
   }
   await choose('quarter');
   if (outer.width < 1100) {
-    const tower = await button('Թաուեր').boundingBox(); near(tower.height, 52);
+    const tower = await button('Թաուեր').boundingBox(); near(tower.height, 32);
     const row = await page.locator('.quarter-room-row').first().getByRole('button').count(); expect(row).toBe(3);
   }
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test('touch opens the month popup and keeps the mobile grid usable', async () => {
@@ -180,4 +185,17 @@ test.each([375, 768, 1024, 1440])('relative quick options preserve mobile button
     if (width < 1440) { near(tower.y, hills.y); near(all.y, first.y); }
     else { expect(hills.y).toBeGreaterThan(tower.y); expect(first.y).toBeGreaterThan(all.y); }
   }
+});
+test.each([1440,1920])('complex and room buttons align to period and amount controls at %i',async width=>{
+ await page.setViewportSize({width,height:1200});await page.goto(url);await ready();
+ for(const value of ['year','month','quarter','custom','quick']){
+  await choose(value);
+  const periodBox=await period().boundingBox(),hills=await button('Հիլլս').boundingBox();
+  const first=await page.locator('.room-values button').first().boundingBox(),last=await page.locator('.room-values button').last().boundingBox();
+  const amountMax=await input('amount','Մինչև').boundingBox();
+  near(hills.height,periodBox.height);near(first.height,periodBox.height);
+  near(last.x+last.width,amountMax.x+amountMax.width);
+  near(first.x-hills.x-hills.width,hills.x-periodBox.x-periodBox.width);
+ }
+ await page.screenshot({path:`test-results/filter-button-alignment-${width}.png`,fullPage:true});
 });
